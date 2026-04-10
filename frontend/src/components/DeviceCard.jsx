@@ -7,8 +7,7 @@ export default function DeviceCard({ device, onView }) {
       </div>
 
       <div className="card-meta">
-        Source: sensor_1<br />
-        Created by: letrunghuu
+        Source: sensor_1
       </div>
 
       <div className="card-location">📍 {device.location}</div>
@@ -27,9 +26,6 @@ export default function DeviceCard({ device, onView }) {
       <div className="card-buttons">
         <button className="btn-card btn-view" onClick={onView}>
           👁️ View Details
-        </button>
-        <button className="btn-card btn-disconnect">
-          🔌 Disconnect
         </button>
         <button className="btn-card btn-delete">
           🗑️ Delete

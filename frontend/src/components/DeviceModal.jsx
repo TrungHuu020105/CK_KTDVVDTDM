@@ -6,6 +6,7 @@ export default function DeviceModal({ deviceId, devices, onClose }) {
   const [stats, setStats] = useState(null);
   const [timeseries, setTimeseries] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const device = devices.find(d => d.device_id === deviceId);
 
@@ -15,6 +16,7 @@ export default function DeviceModal({ deviceId, devices, onClose }) {
 
   const loadDeviceData = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [statsData, seriesData] = await Promise.all([
         fetcher(`/api/device/${deviceId}/stats`),
@@ -24,6 +26,7 @@ export default function DeviceModal({ deviceId, devices, onClose }) {
       setTimeseries(seriesData.data || []);
     } catch (err) {
       console.error('Error loading device data:', err);
+      setError(err.message || 'Failed to load device data. Please check browser console for details.');
     } finally {
       setLoading(false);
     }
@@ -42,6 +45,18 @@ export default function DeviceModal({ deviceId, devices, onClose }) {
 
         {loading ? (
           <div className="loading">⏳ Loading data...</div>
+        ) : error ? (
+          <div style={{ padding: '20px', backgroundColor: 'rgba(255, 100, 100, 0.1)', border: '1px solid rgba(255, 100, 100, 0.3)', borderRadius: '8px', marginTop: '20px' }}>
+            <div style={{ color: '#ff6464', fontWeight: 'bold', marginBottom: '8px' }}>
+              ❌ Error Loading Data
+            </div>
+            <div style={{ color: '#ccc', fontSize: '14px', fontFamily: 'monospace' }}>
+              {error}
+            </div>
+            <div style={{ color: '#aaa', fontSize: '12px', marginTop: '10px' }}>
+              💡 Troubleshooting: Make sure the Databricks streaming pipeline is running and has generated recent data (last 2 hours). Check backend logs for more details.
+            </div>
+          </div>
         ) : (
           <>
             {/* Current Value */}

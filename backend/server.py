@@ -1,132 +1,140 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from databricks import sql
-import os
+import os, json, asyncio
 from dotenv import load_dotenv
-from typing import List, Dict, Any
+from datetime import datetime
 
-# Load environment variables
 load_dotenv()
 
-app = FastAPI(title="IoT Backend API")
+# JSON Encoder for datetime
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        return obj.isoformat() if isinstance(obj, datetime) else super().default(obj)
 
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # React dev server on 5173
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Databricks Configuration
-# Load from .env file - required for production
-DATABRICKS_CONFIG = {
-    "server_hostname": os.getenv("DATABRICKS_HOST"),
-    "http_path": os.getenv("DATABRICKS_PATH"),
-    "personal_access_token": os.getenv("DATABRICKS_TOKEN"),
+# Databricks Setup
+APP_CONFIG = {
+    "server": os.getenv("DATABRICKS_HOST"),
+    "path": os.getenv("DATABRICKS_PATH"),
+    "token": os.getenv("DATABRICKS_TOKEN"),
 }
 
-# Validate required environment variables
-if not all([DATABRICKS_CONFIG["server_hostname"], DATABRICKS_CONFIG["http_path"], DATABRICKS_CONFIG["personal_access_token"]]):
-    raise ValueError("Missing required environment variables: DATABRICKS_HOST, DATABRICKS_PATH, DATABRICKS_TOKEN")
+if not all(APP_CONFIG.values()):
+    raise ValueError("Missing Databricks credentials: DATABRICKS_HOST, DATABRICKS_PATH, DATABRICKS_TOKEN")
 
-# Cache for connection
-db_connection = None
+db_conn = None
 
-def get_connection():
-    """Get or create Databricks connection"""
-    global db_connection
-    try:
-        if db_connection is None:
-            db_connection = sql.connect(
-                server_hostname=DATABRICKS_CONFIG["server_hostname"],
-                http_path=DATABRICKS_CONFIG["http_path"],
-                personal_access_token=DATABRICKS_CONFIG["personal_access_token"],
-                timeout_seconds=10
-            )
-        return db_connection
-    except Exception as e:
-        print(f"Databricks connection error: {e}")
-        raise
+def get_db():
+    global db_conn
+    if db_conn is None:
+        db_conn = sql.connect(
+            server_hostname=APP_CONFIG["server"],
+            http_path=APP_CONFIG["path"],
+            personal_access_token=APP_CONFIG["token"],
+            timeout_seconds=10
+        )
+    return db_conn
 
-def execute_query(query: str) -> List[Dict[str, Any]]:
-    """Execute query and return results as list of dicts"""
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query)
-        
-        # Get column names
-        columns = [desc[0] for desc in cursor.description]
-        
-        # Fetch all rows and convert to list of dicts
-        results = []
-        for row in cursor.fetchall():
-            results.append(dict(zip(columns, row)))
-        
-        cursor.close()
-        return results
-    except Exception as e:
-        print(f"Query execution error: {e}")
-        raise
+def query_db(sql_query):
+    cursor = get_db().cursor()
+    cursor.execute(sql_query)
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-# Routes
+# FastAPI App
+app = FastAPI(title="IoT API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/health")
 async def health():
-    """Health check endpoint"""
-    return {"status": "ok", "message": "Backend is running"}
+    return {"status": "ok"}
 
 @app.get("/api/devices")
 async def get_devices():
-    """Get all IoT devices with latest readings"""
     try:
-        query = """
-        SELECT
-            device_id, device_name, device_type, location,
-            latest_value, unit, last_update, status
-        FROM workspace.metrics_app_streaming.iot_latest_readings
-        ORDER BY device_type, location
-        """
-        data = execute_query(query)
+        # Get latest reading per device with status
+        data = query_db("""
+            WITH latest_readings AS (
+                SELECT
+                    device_id,
+                    device_name,
+                    device_type,
+                    location,
+                    value,
+                    unit,
+                    timestamp,
+                    ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY timestamp DESC) as rn
+                FROM workspace.metrics_app_streaming.iot_sensor_data
+            )
+            SELECT
+                lr.device_id,
+                lr.device_name,
+                lr.device_type,
+                lr.location,
+                lr.value as latest_value,
+                lr.unit,
+                lr.timestamp as last_update,
+                'NORMAL' as status
+            FROM latest_readings lr
+            WHERE lr.rn = 1
+            ORDER BY lr.device_type, lr.location
+        """)
         return {"success": True, "data": data}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @app.get("/api/device/{device_id}/stats")
 async def get_device_stats(device_id: str):
-    """Get statistics for a specific device"""
     try:
-        query = f"""
-        SELECT
-            ROUND(MIN(value), 2) as min_value,
-            ROUND(MAX(value), 2) as max_value,
-            ROUND(AVG(value), 2) as avg_value
-        FROM workspace.metrics_app_streaming.iot_sensor_data
-        WHERE device_id = '{device_id}'
-        """
-        data = execute_query(query)
+        # Calculate stats fresh from raw data (Last 2 hours)
+        data = query_db(f"""
+            SELECT 
+                ROUND(MIN(value), 2) as min_value,
+                ROUND(MAX(value), 2) as max_value,
+                ROUND(AVG(value), 2) as avg_value
+            FROM workspace.metrics_app_streaming.iot_sensor_data
+            WHERE device_id = '{device_id}'
+            AND timestamp >= CURRENT_TIMESTAMP() - INTERVAL 2 HOURS
+        """)
         return {"success": True, "data": data[0] if data else {}}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @app.get("/api/device/{device_id}/timeseries")
 async def get_device_timeseries(device_id: str):
-    """Get time series data for a specific device"""
     try:
-        query = f"""
-        SELECT
-            timestamp, value
-        FROM workspace.metrics_app_streaming.iot_sensor_data
-        WHERE device_id = '{device_id}'
+        # Get 1-minute aggregated timeseries (Last 2 hours)
+        data = query_db(f"""
+            SELECT 
+                DATE_TRUNC('MINUTE', timestamp) as timestamp,
+                ROUND(AVG(value), 2) as value
+            FROM workspace.metrics_app_streaming.iot_sensor_data
+            WHERE device_id = '{device_id}'
             AND timestamp >= CURRENT_TIMESTAMP() - INTERVAL 2 HOURS
-        ORDER BY timestamp ASC
-        """
-        data = execute_query(query)
+            GROUP BY DATE_TRUNC('MINUTE', timestamp)
+            ORDER BY timestamp ASC
+        """)
         return {"success": True, "data": data}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.websocket("/ws/devices")
+async def websocket_devices(websocket: WebSocket):
+    await websocket.accept()
+    print("✅ WebSocket connected")
+    try:
+        while True:
+            try:
+                data = query_db("SELECT device_id, device_name, device_type, location, latest_value, unit, last_update, status FROM workspace.metrics_app_streaming.dashboard_summary ORDER BY device_type, location")
+                await websocket.send_text(json.dumps({"success": True, "data": data}, cls=DateTimeEncoder))
+                print(f"📤 Sent {len(data)} devices")
+                await asyncio.sleep(2)
+            except Exception as e:
+                print(f"⚠️ Error: {e}")
+                await websocket.send_text(json.dumps({"success": False, "error": str(e)}, cls=DateTimeEncoder))
+                await asyncio.sleep(5)
+    except Exception as e:
+        print(f"❌ WebSocket error: {e}")
 
 if __name__ == "__main__":
     import uvicorn

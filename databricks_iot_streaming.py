@@ -367,13 +367,14 @@ print("✅ Latest readings view updated")
 # PART 8: Continuous Data Generation Loop
 # ============================================================================
 
-# This will run continuously and generate new data every 10 seconds
+# This will run continuously and generate new data every 5 seconds
 iteration = 0
-max_iterations = 10  # Reduced for testing (10 iterations = ~100 seconds)
+max_iterations = 720  # 720 iterations × 5 seconds = 1 hour of continuous data
 
 print("🚀 Starting continuous data generation...")
 print(f"📊 Generating {len(IOT_DEVICES)} devices × 1 reading = {len(IOT_DEVICES)} readings per batch")
-print(f"⏱️  Running for {max_iterations} iterations (check dashboards for live updates)")
+print(f"⏱️  Running for {max_iterations} iterations × 5s = {max_iterations * 5 / 60:.0f} minutes of data")
+print(f"💡 This creates a rolling 2-hour data window for charts")
 
 for iteration in range(1, max_iterations + 1):
     try:
@@ -424,8 +425,8 @@ for iteration in range(1, max_iterations + 1):
             total_readings = spark.sql("SELECT COUNT(*) as cnt FROM iot_sensor_data").collect()[0]["cnt"]
             print(f"[{current_time}] Iteration {iteration}: {total_readings} total readings generated ✅")
         
-        # Wait 10 seconds before next batch
-        time.sleep(10)
+        # Wait 5 seconds before next batch
+        time.sleep(5)
         
     except Exception as e:
         print(f"❌ Error at iteration {iteration}: {str(e)}")

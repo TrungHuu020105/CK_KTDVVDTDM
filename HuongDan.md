@@ -340,6 +340,31 @@ pip install -r requirements.txt
 
 **Giải pháp**: CORS đã enable ở FastAPI (allow all origins), kiểm tra backend chạy chưa
 
+### ❌ Biểu đồ không hiển thị dữ liệu (Chart shows "No data available")
+
+**Nguyên nhân & Giải pháp**:
+1. **Streaming đã dừng**: Streaming script chỉ tạo dữ liệu trong khoảng thời gian nhất định
+   - Kiểm tra: Xem `iot_sensor_data` có hàng mới trong 2 giờ qua?
+   ```sql
+   SELECT COUNT(*) FROM workspace.metrics_app_streaming.iot_sensor_data
+   WHERE timestamp >= CURRENT_TIMESTAMP() - INTERVAL 2 HOURS;
+   ```
+   - Để fix: Chạy lại `databricks_iot_streaming.py` (hoặc thiết lập Databricks Job chạy theo lịch)
+
+2. **Dữ liệu chưa được tập hợp**: Kiểm tra table `device_timeseries_minutely` có dữ liệu không
+   ```sql
+   SELECT COUNT(*) FROM workspace.metrics_app_streaming.device_timeseries_minutely;
+   ```
+
+3. **Xem lỗi chi tiết**: Mở browser console (F12), tab "Console" - có error message không?
+
+4. **Dashboard cards OK nhưng chart trống**: Điều này có nghĩa WebSocket + `/api/devices` hoạt động, nhưng `/api/device/:id/timeseries` gặp vấn đề
+   - Kiểm tra trực tiếp:
+   ```bash
+   # Lấy device ID từ dashboard
+   curl http://localhost:8000/api/device/LR_TEMP_001/timeseries
+   ```
+
 ---
 
 ## 📞 Development Commands
