@@ -1,10 +1,10 @@
-# 📱 IoT Devices Dashboard - Hướng Dẫn Sử Dụng
+# 📱 IoT Devices Dashboard - FastAPI + React + Vite
 
 ## 🎯 Tổng Quan
 
 Hệ thống IoT streaming real-time với:
-- **Backend**: Databricks + Spark Streaming + Delta Lake
-- **Frontend**: Streamlit Web App (localhost:8501)
+- **Backend**: FastAPI (Python) - Port **8000**
+- **Frontend**: React + Vite - Port **5173**
 - **Giao diện**: Card-based design, click để xem chi tiết stats & charts
 
 ---
@@ -12,11 +12,31 @@ Hệ thống IoT streaming real-time với:
 ## 📂 Cấu Trúc Dự Án
 
 ```
-CK1_DTDM/
-├── databricks_iot_streaming.py          # Streaming engine
-├── streamlit_dashboard.py               # Web dashboard
-├── requirements.txt                     # Dependencies
-├── HuongDan.md                          # File hướng dẫn này
+.
+├── backend/                          # FastAPI backend
+│   ├── server.py                     # FastAPI application
+│   ├── requirements.txt              # Python dependencies
+│   ├── .env                          # Databricks credentials
+│   └── venv/                         # Virtual environment
+│
+├── frontend/                         # React + Vite app
+│   ├── src/
+│   │   ├── App.jsx                   # Main component
+│   │   ├── App.css                   # Styling (dark Navy + Cyan)
+│   │   ├── main.jsx
+│   │   ├── components/
+│   │   │   ├── DeviceCard.jsx        # Device card component
+│   │   │   ├── DeviceModal.jsx       # Detail modal component
+│   │   │   └── Chart.jsx             # SVG chart component
+│   │   ├── api/
+│   │   │   └── api.js                # API client
+│   │   └── index.css
+│   ├── package.json
+│   ├── vite.config.js
+│   └── node_modules/
+│
+├── databricks_iot_streaming.py       # Streaming engine
+├── HuongDan.md                       # File hướng dẫn này
 └── README.md
 ```
 
@@ -27,7 +47,7 @@ CK1_DTDM/
 ### **BƯỚC 1: Chuẩn Bị Databricks**
 
 #### 1.1 Tạo Catalog & Schema
-Trên Databricks SQL Editor, chạy:
+Trên Databricks SQL Editor:
 ```sql
 CREATE CATALOG IF NOT EXISTS workspace;
 CREATE SCHEMA IF NOT EXISTS workspace.metrics_app_streaming;
@@ -35,11 +55,7 @@ CREATE SCHEMA IF NOT EXISTS workspace.metrics_app_streaming;
 
 #### 1.2 Xác Minh
 ```sql
--- Kiểm tra catalog
-SHOW CATALOGS;
--- Kết quả: samples, system, workspace ✅
-
--- Kiểm tra schema
+SHOW CATALOGS;  -- Kết quả: samples, system, workspace ✅
 SHOW SCHEMAS IN workspace;
 ```
 
@@ -47,10 +63,10 @@ SHOW SCHEMAS IN workspace;
 
 ### **BƯỚC 2: Chạy Streaming Engine**
 
-#### 2.1 Upload & Chạy Notebook
-1. Mở **Databricks Workspace**
-2. **Repos** → **Create** → Upload file `databricks_iot_streaming.py`
-3. Select cluster → **Run All**
+#### 2.1 Upload Notebook
+1. Databricks **Workspace** → **Repos** → **Create**
+2. Upload file: `databricks_iot_streaming.py`
+3. **Select cluster** → **Run All**
 
 **Thời gian**: ~100 giây (10 iterations, mỗi 10s)
 
@@ -58,73 +74,88 @@ SHOW SCHEMAS IN workspace;
 ```sql
 -- Nên có >= 50 rows
 SELECT COUNT(*) FROM workspace.metrics_app_streaming.iot_sensor_data;
-
--- Xem mẫu data
-SELECT * FROM workspace.metrics_app_streaming.iot_latest_readings LIMIT 5;
 ```
 
 ---
 
 ### **BƯỚC 3: Lấy Databricks Credentials**
 
-Cần 3 thông tin để kết nối từ local:
+Cần 3 thông tin:
 
-#### 🔑 **1. Server Hostname**
-```
-Databricks → Settings (top-right) → Workspace URL
-Ví dụ: dbc-8ffd6052-91ee.cloud.databricks.com
+#### 🔑 **Lấy 3 Thông Tin Từ Databricks**
+1. **Server Hostname**: Databricks → Settings → Workspace URL
+2. **SQL Warehouse HTTP Path**: SQL Warehouses → Connection details
+3. **Personal Access Token**: Avatar → User Settings → Developer → Personal access tokens
+
+---
+
+### **BƯỚC 4: Setup Backend (FastAPI)**
+
+#### 4.1 Tạo Virtual Environment & Cài Packages
+```bash
+cd backend
+
+# Tạo virtual environment
+python -m venv venv
+
+# Activate venv
+# Windows:
+venv\Scripts\activate
+# Mac/Linux:
+# source venv/bin/activate
+
+# Cài dependencies
+pip install -r requirements.txt
 ```
 
-#### 🔑 **2. SQL Warehouse HTTP Path**
+#### 4.2 Update `.env`
+File: `backend/.env`
 ```
-SQL Warehouses → Chọn warehouse → Connection details
-Dạng: /sql/1.0/warehouses/3920086a375b89dc
+DATABRICKS_HOST=<your_workspace_url>
+DATABRICKS_PATH=<your_warehouse_path>
+DATABRICKS_TOKEN=<your_access_token>
+```
+**Điền credentials từ Bước 3 vào đây**
+
+#### 4.3 Chạy Backend
+```bash
+python server.py
+# hoặc
+uvicorn server:app --reload --port 8000
+
+# Output: 
+# INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-#### 🔑 **3. Personal Access Token (PAT)**
-```
-Avatar (top-right) → User Settings → Developer 
-→ Personal access tokens → Generate new token
-Dạng: dapixxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#### 4.4 Test Backend
+```bash
+# Health check
+curl http://localhost:8000/api/health
+
+# Get devices
+curl http://localhost:8000/api/devices
 ```
 
 ---
 
-### **BƯỚC 4: Config Local Machine**
+### **BƯỚC 5: Setup Frontend**
 
-#### 4.1 Cài Đặt Python Packages
+#### 5.1 Cài Dependencies
 ```bash
-pip install streamlit databricks-sql-connector plotly pandas
+cd frontend
+npm install
 ```
 
-#### 4.2 Update Credentials
-Mở `streamlit_dashboard.py`, tìm `DATABRICKS_CONFIG`:
-
-```python
-DATABRICKS_CONFIG = {
-    "server_hostname": "dbc-8ffd6052-91ee.cloud.databricks.com",  # ← Thay
-    "http_path": "/sql/1.0/warehouses/3920086a375b89dc",         # ← Thay
-    "personal_access_token": "dapixxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # ← Thay
-    "catalog": "workspace",
-    "schema": "metrics_app_streaming"
-}
-```
-
-#### 4.3 Chạy Streamlit
+#### 5.2 Chạy Frontend
 ```bash
-cd "d:\DuLieuCuaHuu\HK2_20252026\KTHDVVDTDM\CK\CK1_DTDM"
-streamlit run streamlit_dashboard.py
+npm run dev
+# Output:
+# ➜  Local:   http://localhost:5173/
 ```
 
-**Output:**
+#### 5.3 Mở Browser
 ```
-You can now view your Streamlit app in your browser.
-Local URL: http://localhost:8501
-```
-
-#### 4.4 Mở Browser
-```
-http://localhost:8501
+http://localhost:5173
 ```
 
 ---
@@ -132,33 +163,27 @@ http://localhost:8501
 ## 🎨 Giao Diện Dashboard
 
 ### **Layout Chính**
-- **Header**: Tiêu đề "📱 IoT Devices" + nút Refresh
-- **Card Grid**: 3 cột hiển thị các thiết bị
-- **Modal Detail**: Click device card → xem chi tiết
-
-### **Mỗi Device Card**
 ```
-┌─────────────────────────────────────┐
-│ ROOM 1 TEMPERATURE        [temperature]
-│ Source: sensor_1
-│ Created by: letrunghuu
-│ 📍 Living Room
-│
-│ ┌─ Real-time Value ─┐
-│ │      19.19 °C     │
-│ └───────────────────┘
-│
-│ ● Active
-│ [👁️ View Details] ← Click!
-│ [🔌 Disconnect] [🗑️ Delete]
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ 📱 IoT Devices              [🔄 Refresh] [➕ Add Device] │
+│ Manage your IoT sensors and devices                     │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────┬─────────────────┬─────────────────┐
+│ ROOM 1 TEMP     │ BR HUMIDITY     │ GD SOIL MOISTURE│
+│ [temperature]   │ [humidity]      │ [soil_moisture] │
+│ 📍 Living Room  │ 📍 Bedroom      │ 📍 Garden       │
+│ 19.19 °C        │ 81.49 %         │ 29.90 %         │
+│ ● Active        │ ● Active        │ ● Active        │
+│ [View] [DC] [D] │ [View] [DC] [D] │ [View] [DC] [D] │
+└─────────────────┴─────────────────┴─────────────────┘
 ```
 
-### **Modal View (Click "View Details")**
+### **Modal Detail (Click "View Details")**
 ```
-┌─────────────────────────────────────────┐
-│ ROOM 1 TEMPERATURE - Detailed Stats  [X]
-│────────────────────────────────────────│
+┌─────────────────────────────────────────────────────┐
+│ ROOM 1 TEMPERATURE - Detailed Statistics         [X]
+├─────────────────────────────────────────────────────┤
 │ 📊 Current Value: 19.19 °C
 │
 │ 📈 Statistics (Last 2 Hours):
@@ -169,107 +194,75 @@ http://localhost:8501
 │
 │ 📉 Trend Chart (Last 2 Hours):
 │ ┌─────────────────────────────┐
-│ │  [Line chart with Plotly]   │
+│ │    [SVG Line Chart]         │
+│ │    (Cyan line + points)     │
 │ └─────────────────────────────┘
-│
-│ [❌ Close]
-└─────────────────────────────────────────┘
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔄 Hướng Dẫn Sử Dụng
+## 🔄 Workflow
 
-### **Workflow Cơ Bản**
+### **Quick Start (5 phút)**
 
-1. **Bật Streaming** (Databricks)
-   ```
-   Run databricks_iot_streaming.py
-   Chờ ~100 giây để generate data
-   ```
+#### Terminal 1 - Backend
+```bash
+cd backend
 
-2. **Bật Dashboard** (Local)
-   ```
-   streamlit run streamlit_dashboard.py
-   Mở http://localhost:8501
-   ```
+# Activate venv (Windows)
+venv\Scripts\activate
 
-3. **Xem Device Cards**
-   ```
-   Dashboard hiển thị 5 devices (3 loại: temperature, humidity, soil_moisture)
-   Devices được hiển thị chung trong layout 3-cột
-   ```
-
-4. **Xem Chi Tiết**
-   ```
-   Click "👁️ View Details" → Modal mở ra
-   Hiển thị: Average, Min, Max + Trend Chart
-   ```
-
-5. **Refresh Data**
-   ```
-   Click nút "🔄 Refresh" để cập nhật data mới
-   ```
-
----
-
-## 📊 Devices Trong Hệ Thống
-
-| Device | Type | Location | Giá Trị Mẫu | Đơn Vị |
-|--------|------|----------|-----------|--------|
-| LR_TEMP_001 | temperature | Living Room | 19.19 | °C |
-| BR_HUM_001 | humidity | Bedroom | 81.49 | % |
-| GD_SOIL_001 | soil_moisture | Garden | 29.90 | % |
-| OUT_TEMP_001 | temperature | Outdoor | 15.75 | °C |
-| KT_HUM_001 | humidity | Kitchen | 45.20 | % |
-
----
-
-## 💾 Delta Lake Tables
-
-### **1. iot_sensor_data** (Raw streaming data)
-```
-timestamp (TIMESTAMP)       - Thời điểm đo
-device_id (STRING)          - ID thiết bị
-device_name (STRING)        - Tên thiết bị
-device_type (STRING)        - Loại (temperature/humidity/soil_moisture)
-location (STRING)           - Vị trí
-value (DOUBLE)              - Giá trị đo được
-unit (STRING)               - Đơn vị (°C, %, lux, ...)
-batch_id (STRING)           - ID batch/session
-_processing_time (TIMESTAMP)- Thời gian xử lý
+# Run
+python server.py
+# Chờ: "INFO:     Uvicorn running on http://0.0.0.0:8000"
 ```
 
-### **2. iot_latest_readings** (Latest values per device)
-```
-device_id (STRING)          - ID thiết bị
-device_name (STRING)        - Tên thiết bị
-device_type (STRING)        - Loại cảm biến
-location (STRING)           - Vị trí
-latest_value (DOUBLE)       - Giá trị mới nhất
-unit (STRING)               - Đơn vị
-last_update (TIMESTAMP)     - Lần cập nhật gần nhất
-status (STRING)             - ACTIVE / INACTIVE
+#### Terminal 2 - Test Backend (Optional)
+```bash
+curl http://localhost:8000/api/health
+# Output: {"status":"ok","message":"Backend is running"}
 ```
 
-### **3. iot_device_metadata** (Device configuration)
+#### Terminal 3 - Frontend
+```bash
+cd frontend
+npm run dev
+# Chờ: "➜  Local:   http://localhost:5173/"
 ```
-device_id (STRING)          - ID thiết bị
-device_name (STRING)        - Tên thiết bị
-device_type (STRING)        - Loại
-location (STRING)           - Vị trí
-unit (STRING)               - Đơn vị
-min_value (DOUBLE)          - Giá trị min
-max_value (DOUBLE)          - Giá trị max
-mean_value (DOUBLE)         - Giá trị trung bình
-std_dev (DOUBLE)            - Độ lệch chuẩn
-active (BOOLEAN)            - Đang hoạt động?
-created_at (TIMESTAMP)      - Thời tạo
+
+#### Browser
+```
+http://localhost:5173
 ```
 
 ---
 
-## ⚙️ Cấu Hình Nâng Cao
+## 📊 API Endpoints
+
+| Endpoint | Method | Response |
+|----------|--------|----------|
+| `/api/health` | GET | `{"status": "ok"}` |
+| `/api/devices` | GET | Array of devices |
+| `/api/device/{id}/stats` | GET | `{min_value, max_value, avg_value}` |
+| `/api/device/{id}/timeseries` | GET | Array of `{timestamp, value}` |
+
+### **Ví dụ Requests**
+
+```bash
+# Lấy tất cả devices
+curl http://localhost:8000/api/devices
+
+# Lấy stats của device
+curl http://localhost:8000/api/device/LR_TEMP_001/stats
+
+# Lấy timeseries
+curl http://localhost:8000/api/device/LR_TEMP_001/timeseries
+```
+
+---
+
+## 🛠️ Cấu Hình Nâng Cao
 
 ### **Chạy Streaming Lâu Hơn**
 
@@ -280,12 +273,11 @@ Sửa `databricks_iot_streaming.py` - PART 8:
 max_iterations = 10
 
 # Thay bằng:
-max_iterations = 360    # 1 giờ
 max_iterations = 1440   # 4 giờ
 max_iterations = 4320   # 12 giờ
 ```
 
-### **Tăng Tần Suất** (Mỗi 5 giây thay vì 10 giây)
+### **Tăng Tần Suất Generate Data** (5s thay vì 10s)
 
 ```python
 # Hiện tại
@@ -295,136 +287,183 @@ time.sleep(10)
 time.sleep(5)
 ```
 
-### **Giảm Tần Suất** (Mỗi 30 giây)
+### **Production Deployment**
 
-```python
-time.sleep(30)
+```bash
+# Sử dụng Gunicorn
+pip install gunicorn
+gunicorn -w 4 -b 0.0.0.0:8000 server:app
+
+# Với hot reload
+gunicorn -w 4 -b 0.0.0.0:8000 --reload server:app
 ```
 
 ---
 
 ## 🔍 Troubleshooting
 
-### ❌ Lỗi: "Table not found"
+### ❌ Lỗi: "ModuleNotFoundError: No module named 'fastapi'"
+
 **Giải pháp**:
-1. Kiểm tra `DATABRICKS_CONFIG` trong `streamlit_dashboard.py`
-2. Chạy query trên Databricks SQL:
+```bash
+# Activate venv
+venv\Scripts\activate
+
+# Install requirements
+pip install -r requirements.txt
+```
+
+### ❌ Lỗi: "Cannot reach backend (http://localhost:8000)"
+
+**Giải pháp**:
+1. Kiểm tra backend chạy: `curl http://localhost:8000/api/health`
+2. Kiểm tra `.env` có credentials đúng?
+3. Kiểm tra SQL Warehouse **đang Running**
+
+### ❌ Lỗi: "Table not found"
+
+**Giải pháp**:
+1. Kiểm tra streaming notebook đã chạy?
+2. Query Databricks:
    ```sql
    SELECT COUNT(*) FROM workspace.metrics_app_streaming.iot_sensor_data;
    ```
-3. Nếu lỗi, chạy lại streaming notebook
 
-### ❌ Lỗi: "Connection timeout"
+### ❌ Frontend không load
+
 **Giải pháp**:
-1. Xác nhận credentials: hostname, http_path, token
-2. Kiểm tra SQL Warehouse **đang Running** (không Stopped)
-3. Kiểm tra internet connection
+1. Check `http://localhost:5173` - Vite error?
+2. Browser console (F12) - có error?
+3. Rebuild: `npm run build`
 
-### ❌ Dashboard không hiển thị gì
-**Giải pháp**:
-1. Bấm nút "🔄 Refresh"
-2. Kiểm tra console có error không
-3. Xác nhận streaming notebook đã tạo data
+### ❌ CORS Error
 
-### ❌ Streamlit không khởi động
-**Giải pháp**:
-```bash
-# Cập nhật
-pip install --upgrade streamlit
-
-# Chạy lại
-streamlit run streamlit_dashboard.py
-```
+**Giải pháp**: CORS đã enable ở FastAPI (allow all origins), kiểm tra backend chạy chưa
 
 ---
 
-## 📝 SQL Queries Hữu Ích
+## 📞 Development Commands
 
-### **Kiểm Tra Data Count**
-```sql
-SELECT 
-    'iot_sensor_data' as table_name,
-    COUNT(*) as row_count
-FROM workspace.metrics_app_streaming.iot_sensor_data
-UNION ALL
-SELECT 
-    'iot_latest_readings',
-    COUNT(*)
-FROM workspace.metrics_app_streaming.iot_latest_readings;
+### **Backend**
+```bash
+# Start server
+python server.py
+
+# Start với auto-reload
+uvicorn server:app --reload --port 8000
+
+# Test endpoint
+curl http://localhost:8000/api/health
 ```
 
-### **Xem Latest Data**
-```sql
-SELECT * FROM workspace.metrics_app_streaming.iot_latest_readings
-ORDER BY last_update DESC;
-```
+### **Frontend**
+```bash
+# Dev server
+npm run dev
 
-### **Reset (Xóa tất cả data)**
-```sql
-DROP TABLE IF EXISTS workspace.metrics_app_streaming.iot_sensor_data;
-DROP TABLE IF EXISTS workspace.metrics_app_streaming.iot_latest_readings;
-DROP TABLE IF EXISTS workspace.metrics_app_streaming.iot_device_metadata;
-```
+# Build
+npm run build
 
-### **Thống Kê theo Device Type**
-```sql
-SELECT 
-    device_type,
-    COUNT(*) as count,
-    ROUND(AVG(value), 2) as avg_value,
-    ROUND(MIN(value), 2) as min_value,
-    ROUND(MAX(value), 2) as max_value
-FROM workspace.metrics_app_streaming.iot_sensor_data
-GROUP BY device_type
-ORDER BY device_type;
+# Preview
+npm run preview
 ```
 
 ---
 
 ## ✅ Checklist Triển Khai
 
-- [ ] Databricks workspace sẵn sàng
-- [ ] Catalog `workspace` + Schema `metrics_app_streaming` tạo
+- [ ] Databricks workspace tạo
 - [ ] `databricks_iot_streaming.py` upload & chạy
-- [ ] Data được tạo (check: >= 50 rows trong table)
-- [ ] Lấy 3 credentials (hostname, http_path, token)
-- [ ] Update credentials ở `streamlit_dashboard.py`
-- [ ] Install packages: `pip install streamlit databricks-sql-connector plotly pandas`
-- [ ] Chạy: `streamlit run streamlit_dashboard.py`
-- [ ] Mở: `http://localhost:8501`
-- [ ] ✨ Click device cards để xem chi tiết!
+- [ ] Data được tạo (>= 50 rows)
+- [ ] Lấy 3 Databricks credentials
+- [ ] Update `backend/.env` với credentials
+- [ ] `cd backend && python -m venv venv`
+- [ ] Activate venv: `venv\Scripts\activate`
+- [ ] `pip install -r requirements.txt`
+- [ ] `python server.py` (Backend port 8000)
+- [ ] `cd frontend && npm install`
+- [ ] `npm run dev` (Frontend port 5173)
+- [ ] Mở `http://localhost:5173`
+- [ ] ✨ Click device cards!
 
 ---
 
-## 🎬 Quick Start (2 phút)
+## 🎬 Architecture
 
-```bash
-# 1. Databricks - Run notebook
-databricks_iot_streaming.py → Run All
-Chờ 100 giây...
-
-# 2. Local - Config & Run
-# 2.1 Sửa DATABRICKS_CONFIG ở streamlit_dashboard.py
-# 2.2 Chạy:
-streamlit run streamlit_dashboard.py
-
-# 3. Browser
-http://localhost:8501
+```
+┌─────────────────────────┐
+│   Browser (5173)        │ ← User thao tác
+│   React + Vite          │
+└────────────┬────────────┘
+             │ HTTP
+             ↓
+┌─────────────────────────┐
+│   FastAPI Backend (8000)│ ← API proxy
+│   Python                │
+└────────────┬────────────┘
+             │ DBSQL
+             ↓
+┌─────────────────────────┐
+│   Databricks            │ ← Data source
+│   Delta Lake            │
+│ metrics_app_streaming   │
+└─────────────────────────┘
+             ↑
+             │ Streaming
+             │
+┌─────────────────────────┐
+│   Streaming Engine      │
+│   databricks_iot_       │
+│   streaming.py          │
+└─────────────────────────┘
 ```
 
 ---
 
-## 📞 Hỗ Trợ
+## 📱 Devices Trong Hệ Thống
 
-| Vấn đề | File | Giải Pháp |
-|--------|------|----------|
-| Streaming không chạy | `databricks_iot_streaming.py` | Check PART 1-8, Run All |
-| Data không update | Console log | Kiểm tra iteration counter |
-| Connection error | `streamlit_dashboard.py` | Update credentials (line 114-119) |
-| Dashboard trống | Network | Refresh, check warehouse running |
+| Device | Type | Location | Range | Unit |
+|--------|------|----------|-------|------|
+| LR_TEMP_001 | temperature | Living Room | 15-28 | °C |
+| BR_HUM_001 | humidity | Bedroom | 30-70 | % |
+| GD_SOIL_001 | soil_moisture | Garden | 20-80 | % |
+| OUT_TEMP_001 | temperature | Outdoor | 5-35 | °C |
+| KT_HUM_001 | humidity | Kitchen | 30-75 | % |
+
+---
+
+## 🎨 Design Specs
+
+### **Colors (CSS Variables)**
+```css
+--bg-dark: #0f1419;           /* Main dark background */
+--bg-card: #1a2640;           /* Card background */
+--border-cyan: #00d4ff;       /* Cyan borders */
+--cyan-bright: #00d4ff;       /* Bright cyan text */
+--orange-accent: #ff8c00;     /* Orange buttons */
+--red-accent: #f43f5e;        /* Red delete button */
+--green-active: #4ade80;      /* Green status */
+```
+
+---
+
+## 💡 Tips
+
+- **Databricks Credentials**: Copy từ Databricks UI vào `.env` (khỏi config trong code)
+- **Virtual Environment**: Luôn activate venv trước khi run backend
+- **CORS**: Đã enable ở FastAPI, không cần cấu hình thêm
+- **Auto-reload**: Dùng `uvicorn server:app --reload` khi dev
+
+---
+
+## 📚 References
+
+- **FastAPI**: https://fastapi.tiangolo.com/
+- **Databricks SQL Connector**: https://docs.databricks.com/dev-tools/python-sql-connector
+- **React**: https://react.dev/
+- **Vite**: https://vitejs.dev/
 
 ---
 
 **Happy Monitoring! 🚀**
 
-💡 **Tip**: Nếu muốn data liên tục, set `max_iterations = 4320` (12 giờ) rồi bookmark dashboard để monitor real-time! 📊
