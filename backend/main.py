@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 KAFKA_TOPIC = "iot-sensor-data"
 
+METRIC_UNITS = {
+    "temperature": "°C",
+    "humidity": "%",
+    "soil_moisture": "%",
+    "light_intensity": "lux",
+    "pressure": "hPa",
+}
+
+# Tắt log từng bản tin cảm biến để tránh spam khi số lượng sensor lớn.
+LOG_SENSOR_MESSAGES = False
+
 # Global variables (định nghĩa trước app)
 kafka_consumer = None
 consumer_task = None
@@ -90,13 +101,41 @@ async def init_kafka_consumer():
         logger.error(f"✗ Lỗi khởi tạo Kafka: {e}")
         raise
 
+def detect_metric_key(data):
+    """Xác định metric hiện có trong payload single-metric."""
+    metric_type = data.get("metric_type")
+    if metric_type in METRIC_UNITS and data.get(metric_type) is not None:
+        return metric_type
+
+    for key in METRIC_UNITS:
+        if data.get(key) is not None:
+            return key
+
+    return None
+
 async def consume_kafka():
     """Consume messages từ Kafka và broadcast tới clients"""
     try:
         async for message in kafka_consumer:
             data = message.value
-            logger.info(f"📥 Nhận từ Kafka: Temp={data.get('temperature')}°C, "
-                       f"Humidity={data.get('humidity')}%")
+
+            if LOG_SENSOR_MESSAGES:
+                sensor_id = data.get("sensor_id", "N/A")
+                metric_key = detect_metric_key(data)
+
+                if metric_key:
+                    value = data.get(metric_key)
+                    unit = data.get("unit", METRIC_UNITS.get(metric_key, ""))
+                    unit_suffix = f" {unit}" if unit else ""
+                    logger.info(
+                        "📥 Nhận từ Kafka | Sensor=%s | %s=%s%s",
+                        sensor_id,
+                        metric_key,
+                        value,
+                        unit_suffix,
+                    )
+                else:
+                    logger.info("📥 Nhận từ Kafka | Sensor=%s | Payload=%s", sensor_id, data)
             
             # Broadcast tới tất cả connected clients
             await broadcast_to_clients(data)
