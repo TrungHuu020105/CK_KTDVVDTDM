@@ -16,11 +16,17 @@ Xuất bản 5 loại chỉ số:
 import json
 import logging
 import math
+import os
 import random
 import time
 from datetime import datetime
 
 import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from sensor/.env (explicit path)
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Cấu hình logging
 logging.basicConfig(
@@ -29,11 +35,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # Cấu hình MQTT
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
-MQTT_TOPIC = "sensors/iot/data"
-PUBLISH_INTERVAL_SECONDS = 5
+MQTT_BROKER = os.getenv("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "sensors/iot/data")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "iot_user")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "iot_password")
+PUBLISH_INTERVAL_SECONDS = float(os.getenv("PUBLISH_INTERVAL_SECONDS", "5"))
+# Nếu cần gửi trực tiếp Kafka, cấu hình endpoint mặc định:
+# Confluent Cloud Kafka configuration (nếu cần gửi trực tiếp Kafka)
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "pkc-xxxxxx.us-east-2.aws.confluent.cloud:9092")
+KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
+KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "<Your_Confluent_Cloud_API_Key>")
+KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "<Your_Confluent_Cloud_API_Secret>")
 
 # Cấu hình 5 sensor: mỗi sensor đo đúng 1 loại độ đo
 SENSOR_PROFILES = [
@@ -84,7 +100,7 @@ SENSOR_PROFILES = [
         "minimum": 0.0,
         "maximum": 60000.0,
         "start": 10.0,
-        "max_step": 1200.0,
+        "max_step": 80.0,
         "pull_strength": 0.30,
         "decimals": 0,
         "light_peak": 38000.0,
@@ -210,6 +226,8 @@ def on_disconnect(client, userdata, rc):
 
 # Tạo client MQTT
 client = mqtt.Client()
+if MQTT_USERNAME:
+    client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
 
@@ -228,6 +246,8 @@ def main():
     }
 
     logger.info("🚀 Sensor Simulator bắt đầu...")
+    logger.info("MQTT broker: %s:%s", MQTT_BROKER, MQTT_PORT)
+    logger.info("MQTT username: %s", MQTT_USERNAME)
     logger.info("📤 Gửi dữ liệu tới topic: %s", MQTT_TOPIC)
     logger.info("🧪 Số sensor đang mô phỏng: %s", len(SENSOR_PROFILES))
     logger.info("📡 Mapping: sensor_1->temperature, sensor_2->humidity, sensor_3->soil_moisture, sensor_4->light_intensity, sensor_5->pressure")

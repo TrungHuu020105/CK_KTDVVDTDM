@@ -100,7 +100,7 @@ MQTT topic where sensor data is published
 
 **Test Subscribe:**
 ```bash
-docker-compose exec mosquitto mosquitto_sub -t "sensors/iot/data"
+docker-compose exec mosquitto mosquitto_sub -u iot_user -P iot_password -t "sensors/iot/data"
 ```
 
 ## Kafka Topics

@@ -5,7 +5,6 @@ Consume dữ liệu từ Kafka và broadcast qua WebSocket tới clients
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import asyncio
 import json
@@ -13,8 +12,15 @@ import logging
 from typing import Set
 import aiokafka
 import os
-from pathlib import Path
+from dotenv import load_dotenv
+import ssl
 
+# Load environment variables from backend/.env (explicit path)
+load_dotenv(
+    os.path.join(os.path.dirname(__file__), ".env"),
+    override=True,
+    encoding="utf-8",
+)
 # Cấu hình logging
 logging.basicConfig(
     level=logging.INFO,
@@ -22,9 +28,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_origins(value):
+    if not value:
+        return []
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
 # Cấu hình
-KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-KAFKA_TOPIC = "iot-sensor-data"
+def env(name, default=None):
+    v = os.getenv(name, default)
+    return v.strip() if isinstance(v, str) else v
+
+# Confluent Cloud Kafka configuration
+KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
+KAFKA_TOPIC = env("KAFKA_TOPIC", "iot-sensor-data")
+KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+KAFKA_SASL_MECHANISM = env("KAFKA_SASL_MECHANISM", "PLAIN")
+KAFKA_SASL_USERNAME = env("KAFKA_SASL_USERNAME")
+KAFKA_SASL_PASSWORD = env("KAFKA_SASL_PASSWORD")
+
+DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+CORS_ORIGINS = parse_origins(os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS))
+CORS_ALLOW_CREDENTIALS = parse_bool(os.getenv("CORS_ALLOW_CREDENTIALS"), default=True)
+
+if "*" in CORS_ORIGINS and CORS_ALLOW_CREDENTIALS:
+    logger.warning(
+        "CORS_ORIGINS contains '*' with credentials enabled. Credentials have been disabled for safety."
+    )
+    CORS_ALLOW_CREDENTIALS = False
 
 METRIC_UNITS = {
     "temperature": "°C",
@@ -35,11 +72,12 @@ METRIC_UNITS = {
 }
 
 # Tắt log từng bản tin cảm biến để tránh spam khi số lượng sensor lớn.
-LOG_SENSOR_MESSAGES = False
+LOG_SENSOR_MESSAGES = parse_bool(os.getenv("LOG_SENSOR_MESSAGES"), default=False)
 
 # Global variables (định nghĩa trước app)
 kafka_consumer = None
 consumer_task = None
+kafka_connected = False
 connected_clients: Set[WebSocket] = set()
 client_lock = asyncio.Lock()
 
@@ -47,11 +85,22 @@ client_lock = asyncio.Lock()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Quản lý startup và shutdown events"""
-    global kafka_consumer, consumer_task
+    global kafka_consumer, consumer_task, kafka_connected
     
     # === STARTUP ===
     logger.info("🚀 Khởi động FastAPI Backend...")
     try:
+        # Kiểm tra cấu hình Kafka từ env
+        def _validate_kafka_config():
+            missing = []
+            if not KAFKA_BOOTSTRAP_SERVERS:
+                missing.append('KAFKA_BOOTSTRAP_SERVERS')
+            if not KAFKA_SASL_USERNAME or not KAFKA_SASL_PASSWORD:
+                logger.warning('⚠️  Kafka SASL credentials not set in environment; consumer may fail to connect to Confluent Cloud')
+            if missing:
+                logger.warning('⚠️  Missing Kafka config: %s', ','.join(missing))
+
+        _validate_kafka_config()
         await init_kafka_consumer()
         # Tạo task consume kafka
         consumer_task = asyncio.create_task(consume_kafka())
@@ -67,6 +116,7 @@ async def lifespan(app: FastAPI):
             consumer_task.cancel()
         if kafka_consumer:
             await kafka_consumer.stop()
+        kafka_connected = False
         logger.info("✓ Backend đã dừng")
 
 # Khởi tạo FastAPI app với lifespan
@@ -75,8 +125,8 @@ app = FastAPI(title="IoT Real-time Dashboard API", version="1.0", lifespan=lifes
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -84,22 +134,31 @@ app.add_middleware(
 # === Kafka Consumer ===
 
 async def init_kafka_consumer():
-    """Khởi tạo Kafka Consumer"""
-    global kafka_consumer
-    try:
-        kafka_consumer = aiokafka.AIOKafkaConsumer(
-            KAFKA_TOPIC,
-            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-            auto_offset_reset='latest',
-            group_id='fastapi-consumer-group',
-            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-            consumer_timeout_ms=1000
-        )
-        await kafka_consumer.start()
-        logger.info(f"✓ Kafka Consumer khởi tạo, subscribe vào: {KAFKA_TOPIC}")
-    except Exception as e:
-        logger.error(f"✗ Lỗi khởi tạo Kafka: {e}")
-        raise
+    global kafka_consumer, kafka_connected
+
+    logger.info("bootstrap=%r", KAFKA_BOOTSTRAP_SERVERS)
+    logger.info("topic=%r", KAFKA_TOPIC)
+    logger.info("protocol=%r", KAFKA_SECURITY_PROTOCOL)
+    logger.info("mechanism=%r", KAFKA_SASL_MECHANISM)
+    logger.info("username_prefix=%r", KAFKA_SASL_USERNAME[:4] + "***" if KAFKA_SASL_USERNAME else None)
+    logger.info("password_len=%s", len(KAFKA_SASL_PASSWORD) if KAFKA_SASL_PASSWORD else None)
+
+    ssl_context = ssl.create_default_context()
+
+    kafka_consumer = aiokafka.AIOKafkaConsumer(
+        KAFKA_TOPIC,
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        auto_offset_reset="latest",
+        group_id="fastapi-consumer-group",
+        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+        security_protocol=KAFKA_SECURITY_PROTOCOL,
+        sasl_mechanism=KAFKA_SASL_MECHANISM,
+        sasl_plain_username=KAFKA_SASL_USERNAME,
+        sasl_plain_password=KAFKA_SASL_PASSWORD,
+        ssl_context=ssl_context,
+    )
+
+    await kafka_consumer.start()
 
 def detect_metric_key(data):
     """Xác định metric hiện có trong payload single-metric."""
@@ -115,6 +174,7 @@ def detect_metric_key(data):
 
 async def consume_kafka():
     """Consume messages từ Kafka và broadcast tới clients"""
+    global kafka_connected
     try:
         async for message in kafka_consumer:
             data = message.value
@@ -140,7 +200,14 @@ async def consume_kafka():
             # Broadcast tới tất cả connected clients
             await broadcast_to_clients(data)
     except Exception as e:
+        kafka_connected = False
         logger.error(f"✗ Lỗi consume Kafka: {e}")
+
+
+def is_kafka_ready():
+    consumer_running = kafka_consumer is not None and kafka_connected
+    task_running = consumer_task is not None and not consumer_task.done()
+    return consumer_running and task_running
 
 async def broadcast_to_clients(data):
     """Broadcast data tới tất cả connected WebSocket clients"""
@@ -192,7 +259,7 @@ async def health():
     return {
         "status": "ok",
         "connected_clients": len(connected_clients),
-        "kafka_connected": kafka_consumer is not None
+        "kafka_connected": is_kafka_ready()
     }
 
 @app.get("/api/status")
@@ -203,7 +270,8 @@ async def status():
         "version": "1.0",
         "kafka_topic": KAFKA_TOPIC,
         "connected_clients": len(connected_clients),
-        "kafka_broker": KAFKA_BOOTSTRAP_SERVERS
+        "kafka_broker": KAFKA_BOOTSTRAP_SERVERS,
+        "kafka_connected": is_kafka_ready(),
     }
 
 # === Root endpoint ===

@@ -79,7 +79,7 @@ Bạn sẽ thấy:
 curl http://localhost:8000/api/health
 
 # MQTT messages
-docker-compose exec mosquitto mosquitto_sub -t "sensors/iot/data"
+docker-compose exec mosquitto mosquitto_sub -u iot_user -P iot_password -t "sensors/iot/data"
 
 # Kafka messages
 docker-compose exec kafka kafka-console-consumer.sh \

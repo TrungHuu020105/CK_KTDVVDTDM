@@ -5,10 +5,15 @@ Subscribe vào MQTT broker và produce dữ liệu tới Kafka topic
 
 import paho.mqtt.client as mqtt
 from kafka import KafkaProducer
+from dotenv import load_dotenv
+import os
 import json
 import logging
 from datetime import datetime
 import time
+
+# Load environment variables from bridge/.env (explicit path)
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Cấu hình logging
 logging.basicConfig(
@@ -18,12 +23,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Cấu hình
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
-MQTT_TOPIC = "sensors/iot/data"
+MQTT_BROKER = os.getenv("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "sensors/iot/data")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "iot_user")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "iot_password")
 
-KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-KAFKA_TOPIC = "iot-sensor-data"
+
+# Confluent Cloud Kafka configuration
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "pkc-921jm.us-east-2.aws.confluent.cloud:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "iot-sensor-data")
+KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
+KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "")
+KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "")
 
 METRIC_UNITS = {
     "temperature": "°C",
@@ -49,16 +62,19 @@ def init_kafka_producer():
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 acks='all',
                 retries=3,
-                request_timeout_ms=10000
+                request_timeout_ms=10000,
+                security_protocol=KAFKA_SECURITY_PROTOCOL,
+                sasl_mechanism=KAFKA_SASL_MECHANISM,
+                sasl_plain_username=KAFKA_SASL_USERNAME,
+                sasl_plain_password=KAFKA_SASL_PASSWORD
             )
-            logger.info("✓ Kết nối tới Kafka thành công")
+            logger.info("✓ Kết nối tới Kafka (Confluent Cloud) thành công")
             return True
         except Exception as e:
             retry_count += 1
             logger.warning(f"⚠️  Lỗi Kafka (lần {retry_count}/{max_retries}): {e}")
             if retry_count < max_retries:
                 time.sleep(2)
-    
     return False
 
 # Callback MQTT
@@ -80,7 +96,8 @@ def on_message(client, userdata, msg):
         
         # Gửi tới Kafka
         if kafka_producer:
-            kafka_producer.send(KAFKA_TOPIC, value=data)
+            send_future = kafka_producer.send(KAFKA_TOPIC, value=data)
+            send_future.get(timeout=10)
             metric_key = data.get('metric_type')
 
             if not metric_key:
@@ -117,6 +134,8 @@ def on_disconnect(client, userdata, rc):
 
 # Khởi tạo MQTT Client
 mqtt_client = mqtt.Client()
+if MQTT_USERNAME:
+    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.on_disconnect = on_disconnect
@@ -124,6 +143,9 @@ mqtt_client.on_disconnect = on_disconnect
 # Main
 if __name__ == "__main__":
     logger.info("🚀 MQTT to Kafka Bridge bắt đầu...")
+    logger.info("MQTT broker: %s:%s | topic: %s", MQTT_BROKER, MQTT_PORT, MQTT_TOPIC)
+    logger.info("MQTT username: %s", MQTT_USERNAME)
+    logger.info("Kafka broker: %s | topic: %s", KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC)
     
     # Khởi tạo Kafka Producer
     if not init_kafka_producer():
@@ -138,8 +160,10 @@ if __name__ == "__main__":
         logger.info("\n⏹️  Dừng Bridge")
         mqtt_client.loop_stop()
         if kafka_producer:
+            kafka_producer.flush(timeout=5)
             kafka_producer.close()
     except Exception as e:
         logger.error(f"✗ Lỗi: {e}")
         if kafka_producer:
+            kafka_producer.flush(timeout=5)
             kafka_producer.close()

@@ -116,7 +116,7 @@ curl http://localhost:8000/api/health
 
 ### Test MQTT
 ```bash
-docker-compose exec mosquitto mosquitto_sub -t "sensors/iot/data"
+docker-compose exec mosquitto mosquitto_sub -u iot_user -P iot_password -t "sensors/iot/data"
 ```
 
 ### Test Kafka

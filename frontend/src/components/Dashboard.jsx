@@ -101,8 +101,14 @@ const getDefaultDecimals = (metric) => {
 }
 
 const getWebSocketUrl = () => {
+  const configuredUrl = import.meta.env.VITE_WS_URL?.trim()
+  if (configuredUrl) {
+    return configuredUrl
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.hostname}:8000/ws`
+  const backendPort = import.meta.env.VITE_BACKEND_PORT || '8000'
+  return `${protocol}//${window.location.hostname}:${backendPort}/ws`
 }
 
 const buildAutoCardsFromPayload = (payload, devices) => {
@@ -229,7 +235,12 @@ const Dashboard = () => {
   })
   const wsRef = useRef(null)
   const reconnectTimerRef = useRef(null)
+  const allDevicesRef = useRef(allDevices)
   const socketUrl = useMemo(() => getWebSocketUrl(), [])
+
+  useEffect(() => {
+    allDevicesRef.current = allDevices
+  }, [allDevices])
 
   const resetNewDevice = () => {
     setNewDevice({
@@ -347,9 +358,10 @@ const Dashboard = () => {
         wsRef.current.onmessage = (event) => {
           try {
             const payload = JSON.parse(event.data)
-            const inferred = buildAutoCardsFromPayload(payload, allDevices)
+            const currentDevices = allDevicesRef.current
+            const inferred = buildAutoCardsFromPayload(payload, currentDevices)
             const targetCardIds = Array.from(
-              new Set([...findTargetCardIds(payload, allDevices), ...inferred.targetIds]),
+              new Set([...findTargetCardIds(payload, currentDevices), ...inferred.targetIds]),
             )
 
             if (inferred.newCards.length > 0) {
@@ -374,7 +386,7 @@ const Dashboard = () => {
             setDeviceState((previousState) => {
               const nextState = { ...previousState }
               const now = Date.now()
-              const deviceLookup = [...allDevices, ...inferred.newCards]
+              const deviceLookup = [...allDevicesRef.current, ...inferred.newCards]
 
               targetCardIds.forEach((cardId) => {
                 const cardConfig = deviceLookup.find((device) => device.id === cardId)
@@ -441,7 +453,7 @@ const Dashboard = () => {
         wsRef.current.close()
       }
     }
-  }, [socketUrl, allDevices])
+  }, [socketUrl])
 
   useEffect(() => {
     const staleCheck = setInterval(() => {
