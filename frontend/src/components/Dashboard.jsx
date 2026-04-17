@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import Analytics from './Analytics'
 
 const BASE_DEVICE_CONFIG = [
   {
@@ -218,6 +219,7 @@ const formatValue = (value, decimals = 2) => {
 const Dashboard = () => {
   const [customDevices, setCustomDevices] = useState([])
   const [autoDevices, setAutoDevices] = useState([])
+  const [activeNavItem, setActiveNavItem] = useState('IoT Devices')
   const allDevices = useMemo(
     () => [...BASE_DEVICE_CONFIG, ...customDevices, ...autoDevices],
     [customDevices, autoDevices],
@@ -496,6 +498,13 @@ const Dashboard = () => {
     [allDevices, deviceState],
   )
 
+  const activeDeviceCount = useMemo(
+    () => visibleDevices.filter((device) => deviceState[device.id]?.active).length,
+    [visibleDevices, deviceState],
+  )
+
+  const inactiveDeviceCount = visibleDevices.length - activeDeviceCount
+
   return (
     <div className="dashboard-shell">
       <aside className="sidebar">
@@ -524,7 +533,13 @@ const Dashboard = () => {
             <button
               type="button"
               key={item}
-              className={`nav-item ${item === 'IoT Devices' ? 'active' : ''}`}
+              className={`nav-item ${item === activeNavItem ? 'active' : ''}`}
+              onClick={() => {
+                setActiveNavItem(item)
+                if (item !== 'IoT Devices') {
+                  setShowAddForm(false)
+                }
+              }}
             >
               <span className="nav-ring" aria-hidden="true"></span>
               {item}
@@ -541,172 +556,193 @@ const Dashboard = () => {
 
       <main className="workspace">
         <div className="workspace-header">
-          <p className="workspace-subtitle">Manage your IoT sensors and devices</p>
-          <button
-            type="button"
-            className="add-device-button"
-            onClick={() => {
-              setShowAddForm((previousState) => !previousState)
-            }}
-          >
-            + Add Device
-          </button>
+          <p className="workspace-subtitle">
+            {activeNavItem === 'My Dashboard' && 'Analyze historical data from Databricks'}
+            {activeNavItem === 'IoT Devices' && 'Manage your IoT sensors and devices'}
+            {activeNavItem === 'Alerts' && 'Monitor device status and activity'}
+          </p>
+          {activeNavItem === 'IoT Devices' ? (
+            <button
+              type="button"
+              className="add-device-button"
+              onClick={() => {
+                setShowAddForm((previousState) => !previousState)
+              }}
+            >
+              + Add Device
+            </button>
+          ) : null}
         </div>
 
-        {showAddForm ? (
-          <form className="add-device-form" onSubmit={handleAddDevice}>
-            <label className="add-field">
-              Device name
-              <input
-                type="text"
-                name="title"
-                placeholder="e.g. Garage Temperature"
-                value={newDevice.title}
-                onChange={handleNewDeviceFieldChange}
-                required
-              />
-            </label>
+        {activeNavItem === 'My Dashboard' ? <Analytics /> : null}
 
-            <label className="add-field">
-              Sensor ID
-              <input
-                type="text"
-                name="source"
-                placeholder="e.g. sensor_2"
-                value={newDevice.source}
-                onChange={handleNewDeviceFieldChange}
-              />
-            </label>
-
-            <label className="add-field">
-              Location
-              <input
-                type="text"
-                name="location"
-                placeholder="e.g. Garage"
-                value={newDevice.location}
-                onChange={handleNewDeviceFieldChange}
-              />
-            </label>
-
-            <label className="add-field">
-              Metric
-              <select
-                name="dataKey"
-                value={newDevice.dataKey}
-                onChange={handleNewDeviceFieldChange}
-              >
-                {METRIC_OPTIONS.map((option) => (
-                  <option key={option.key} value={option.key}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="add-field">
-              Unit
-              <input
-                type="text"
-                name="unit"
-                placeholder="Unit"
-                value={newDevice.unit}
-                onChange={handleNewDeviceFieldChange}
-              />
-            </label>
-
-            <div className="add-form-actions">
-              <button
-                type="button"
-                className="cancel-device-button"
-                onClick={() => {
-                  setShowAddForm(false)
-                  resetNewDevice()
-                }}
-              >
-                Cancel
-              </button>
-              <button type="submit" className="save-device-button">
-                Save Device
-              </button>
-            </div>
-          </form>
-        ) : null}
-
-        {visibleDevices.length === 0 ? (
+        {activeNavItem === 'Alerts' ? (
           <div className="no-device-data">
-            <h3>Chưa có thiết bị nào gửi dữ liệu</h3>
-            <p>
-              Dashboard sẽ tự động hiện device-card khi backend nhận được dữ liệu từ thiết bị.
-            </p>
+            <h3>System Status</h3>
+            <p>Total devices with data: {visibleDevices.length}</p>
+            <p>Active devices: {activeDeviceCount}</p>
+            <p>Inactive devices: {inactiveDeviceCount}</p>
           </div>
         ) : null}
 
-        <section className="device-grid" aria-label="Device cards">
-          {visibleDevices.map((device) => {
-            const state =
-              deviceState[device.id] || {
-                value: null,
-                active: false,
-              }
-            const value = formatValue(state.value, device.decimals)
+        {activeNavItem === 'IoT Devices' ? (
+          <>
+            {showAddForm ? (
+              <form className="add-device-form" onSubmit={handleAddDevice}>
+                <label className="add-field">
+                  Device name
+                  <input
+                    type="text"
+                    name="title"
+                    placeholder="e.g. Garage Temperature"
+                    value={newDevice.title}
+                    onChange={handleNewDeviceFieldChange}
+                    required
+                  />
+                </label>
 
-            return (
-              <article className="device-card" key={device.id}>
-                <div className="card-top">
-                  <h2>{device.title}</h2>
-                  <span className="top-chip">{device.tag}</span>
-                </div>
+                <label className="add-field">
+                  Sensor ID
+                  <input
+                    type="text"
+                    name="source"
+                    placeholder="e.g. sensor_2"
+                    value={newDevice.source}
+                    onChange={handleNewDeviceFieldChange}
+                  />
+                </label>
 
-                <p className="source-label">Source:</p>
-                <p className="source-meta">{device.source}</p>
-                <p className="source-value">
-                  <span className="source-home" aria-hidden="true"></span>
-                  {device.location}
-                </p>
+                <label className="add-field">
+                  Location
+                  <input
+                    type="text"
+                    name="location"
+                    placeholder="e.g. Garage"
+                    value={newDevice.location}
+                    onChange={handleNewDeviceFieldChange}
+                  />
+                </label>
 
-                <div className="value-box">
-                  <p>Real-time Value</p>
-                  <div className="value-line">
-                    <strong>{value}</strong>
-                    {device.unit ? <span>{device.unit}</span> : null}
-                  </div>
-                </div>
+                <label className="add-field">
+                  Metric
+                  <select
+                    name="dataKey"
+                    value={newDevice.dataKey}
+                    onChange={handleNewDeviceFieldChange}
+                  >
+                    {METRIC_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-                <p className={`card-state ${state.active ? 'active' : 'inactive'}`}>
-                  <span className="state-dot" aria-hidden="true"></span>
-                  {state.active ? 'Active' : 'Inactive'}
-                </p>
+                <label className="add-field">
+                  Unit
+                  <input
+                    type="text"
+                    name="unit"
+                    placeholder="Unit"
+                    value={newDevice.unit}
+                    onChange={handleNewDeviceFieldChange}
+                  />
+                </label>
 
-                <div className="card-actions">
-                  <button type="button" className="action-button alerts">
-                    Alerts
-                  </button>
-                  <button type="button" className="action-button edit" disabled>
-                    Edit
-                  </button>
+                <div className="add-form-actions">
                   <button
                     type="button"
-                    className="action-button delete"
+                    className="cancel-device-button"
                     onClick={() => {
-                      if (device.isCustom) {
-                        handleDeleteCustomDevice(device.id)
-                      }
+                      setShowAddForm(false)
+                      resetNewDevice()
                     }}
-                    disabled={!device.isCustom}
                   >
-                    Delete
+                    Cancel
+                  </button>
+                  <button type="submit" className="save-device-button">
+                    Save Device
                   </button>
                 </div>
-              </article>
-            )
-          })}
-        </section>
+              </form>
+            ) : null}
+
+            {visibleDevices.length === 0 ? (
+              <div className="no-device-data">
+                <h3>Chưa có thiết bị nào gửi dữ liệu</h3>
+                <p>
+                  Dashboard sẽ tự động hiện device-card khi backend nhận được dữ liệu từ thiết bị.
+                </p>
+              </div>
+            ) : null}
+
+            <section className="device-grid" aria-label="Device cards">
+              {visibleDevices.map((device) => {
+                const state =
+                  deviceState[device.id] || {
+                    value: null,
+                    active: false,
+                  }
+                const value = formatValue(state.value, device.decimals)
+
+                return (
+                  <article className="device-card" key={device.id}>
+                    <div className="card-top">
+                      <h2>{device.title}</h2>
+                      <span className="top-chip">{device.tag}</span>
+                    </div>
+
+                    <p className="source-label">Source:</p>
+                    <p className="source-meta">{device.source}</p>
+                    <p className="source-value">
+                      <span className="source-home" aria-hidden="true"></span>
+                      {device.location}
+                    </p>
+
+                    <div className="value-box">
+                      <p>Real-time Value</p>
+                      <div className="value-line">
+                        <strong>{value}</strong>
+                        {device.unit ? <span>{device.unit}</span> : null}
+                      </div>
+                    </div>
+
+                    <p className={`card-state ${state.active ? 'active' : 'inactive'}`}>
+                      <span className="state-dot" aria-hidden="true"></span>
+                      {state.active ? 'Active' : 'Inactive'}
+                    </p>
+
+                    <div className="card-actions">
+                      <button type="button" className="action-button alerts">
+                        Alerts
+                      </button>
+                      <button type="button" className="action-button edit" disabled>
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button delete"
+                        onClick={() => {
+                          if (device.isCustom) {
+                            handleDeleteCustomDevice(device.id)
+                          }
+                        }}
+                        disabled={!device.isCustom}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+            </section>
+          </>
+        ) : null}
 
         <footer className="workspace-footer">
           <span>{isConnected ? 'Connected' : 'Reconnecting...'}</span>
           <span>Messages: {messageCount}</span>
-          <span>Socket: {socketUrl}</span>
+          <span>{activeNavItem === 'IoT Devices' ? `Socket: ${socketUrl}` : `View: ${activeNavItem}`}</span>
         </footer>
       </main>
     </div>

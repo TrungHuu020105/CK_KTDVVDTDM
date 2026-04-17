@@ -1,19 +1,24 @@
 """
-FastAPI Backend with WebSocket
-Consume dữ liệu từ Kafka và broadcast qua WebSocket tới clients
+FastAPI Backend with WebSocket + Databricks Analytics
+Consume dữ liệu từ Kafka (WebSocket) + Query từ Databricks (REST API)
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
-from typing import Set
+from typing import Set, Optional, List
 import aiokafka
 import os
 from dotenv import load_dotenv
 import ssl
+from datetime import datetime, timedelta
+import pandas as pd
+
+# Import Databricks client
+from databricks_client import get_databricks_client
 
 # Load environment variables from backend/.env (explicit path)
 load_dotenv(
@@ -274,16 +279,136 @@ async def status():
         "kafka_connected": is_kafka_ready(),
     }
 
-# === Root endpoint ===
-
 @app.get("/")
 async def root():
     """Root endpoint"""
     return {
         "message": "IoT Real-time Dashboard API",
         "docs": "/docs",
-        "websocket": "ws://localhost:8000/ws"
+        "websocket": "ws://localhost:8000/ws",
+        "analytics": "/api/analytics/measurements"
     }
+
+
+# === Analytics API Endpoints ===
+
+@app.get("/api/analytics/sensors")
+async def get_sensors():
+    """
+    Lấy danh sách sensors có dữ liệu trong Databricks
+    Returns: List[{sensor_id, location, metric_type, unit}]
+    """
+    try:
+        client = get_databricks_client()
+        if not client.is_connected():
+            return {
+                "status": "error",
+                "message": "Databricks not connected",
+                "data": []
+            }
+        
+        sensors = client.get_sensors()
+        return {
+            "status": "ok",
+            "data": sensors
+        }
+    except Exception as e:
+        logger.error(f"✗ Error getting sensors: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }
+
+
+@app.get("/api/analytics/measurements")
+async def get_measurements(
+    sensor_id: Optional[str] = Query(None, description="Sensor ID (e.g., sensor_1)"),
+    metric_type: Optional[str] = Query(None, description="Metric type (e.g., temperature)"),
+    from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(10000, description="Max records"),
+):
+    """
+    Truy vấn dữ liệu đo lường từ Databricks
+    
+    Query params:
+    - sensor_id: sensor_1, sensor_2, ...
+    - metric_type: temperature, humidity, soil_moisture, light_intensity, pressure
+    - from_date: YYYY-MM-DD
+    - to_date: YYYY-MM-DD
+    - limit: Max records (default 10000)
+    
+    Returns: List[{event_ts, sensor_id, location, metric_type, metric_value, unit}]
+    """
+    try:
+        # Validate dates
+        if from_date:
+            try:
+                datetime.strptime(from_date, "%Y-%m-%d")
+            except ValueError:
+                return {
+                    "status": "error",
+                    "message": "Invalid from_date format (use YYYY-MM-DD)",
+                    "data": []
+                }
+        
+        if to_date:
+            try:
+                datetime.strptime(to_date, "%Y-%m-%d")
+            except ValueError:
+                return {
+                    "status": "error",
+                    "message": "Invalid to_date format (use YYYY-MM-DD)",
+                    "data": []
+                }
+        
+        client = get_databricks_client()
+        if not client.is_connected():
+            return {
+                "status": "error",
+                "message": "Databricks not connected",
+                "data": []
+            }
+        
+        df = client.query_measurements(
+            sensor_id=sensor_id,
+            metric_type=metric_type,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+        )
+        
+        if df.empty:
+            return {
+                "status": "ok",
+                "message": "No data found",
+                "data": []
+            }
+        
+        # Convert to list of dicts
+        records = df.to_dict(orient="records")
+        
+        # Convert timestamps to ISO format strings
+        for record in records:
+            if isinstance(record.get("event_ts"), pd.Timestamp):
+                record["event_ts"] = record["event_ts"].isoformat()
+        
+        logger.info(f"✓ Returned {len(records)} measurements")
+        return {
+            "status": "ok",
+            "count": len(records),
+            "data": records
+        }
+    
+    except Exception as e:
+        logger.error(f"✗ Error getting measurements: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }
+
 
 if __name__ == "__main__":
     import uvicorn
