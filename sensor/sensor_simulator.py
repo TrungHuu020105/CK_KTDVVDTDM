@@ -20,6 +20,7 @@ import os
 import random
 import time
 from datetime import datetime
+import pytz
 
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
@@ -245,18 +246,23 @@ def main():
         profile["sensor_id"]: init_sensor_state(profile) for profile in SENSOR_PROFILES
     }
 
+    # Set timezone Việt Nam
+    tz_vietnam = pytz.timezone('Asia/Ho_Chi_Minh')
+
     logger.info("🚀 Sensor Simulator bắt đầu...")
     logger.info("MQTT broker: %s:%s", MQTT_BROKER, MQTT_PORT)
     logger.info("MQTT username: %s", MQTT_USERNAME)
     logger.info("📤 Gửi dữ liệu tới topic: %s", MQTT_TOPIC)
     logger.info("🧪 Số sensor đang mô phỏng: %s", len(SENSOR_PROFILES))
     logger.info("📡 Mapping: sensor_1->temperature, sensor_2->humidity, sensor_3->soil_moisture, sensor_4->light_intensity, sensor_5->pressure")
+    logger.info("🌍 Timezone: Asia/Ho_Chi_Minh (UTC+7)")
 
     counter = 0
 
     try:
         while True:
-            now = datetime.now()
+            # Lấy thời gian hiện tại ở múi giờ Việt Nam
+            now = datetime.now(tz_vietnam).replace(tzinfo=None)
 
             for profile in SENSOR_PROFILES:
                 sensor_id = profile["sensor_id"]

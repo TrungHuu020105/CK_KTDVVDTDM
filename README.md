@@ -1,113 +1,184 @@
-# 🚀 IoT Real-time Dashboard
+# 🚀 IoT Real-time Dashboard with Analytics
 
-Một hệ thống hiển thị dữ liệu IoT real-time với độ trễ cực thấp. Dữ liệu chảy từ Sensor → MQTT → Kafka → Backend → Frontend qua WebSocket.
+Hệ thống **IoT hoàn chỉnh** từ cảm biến mô phỏng đến dashboard real-time + phân tích sâu trên Databricks. Dữ liệu chảy qua 2 luồng chính:
 
-## 🏗️ Kiến trúc Hệ thống
+## 📊 2 Luồng Dữ Liệu
 
+### **Luồng 1: Real-time Dashboard** (WebSocket)
 ```
-┌─────────────┐      ┌──────────────┐      ┌─────────┐      ┌─────────┐      ┌────────────┐
-│   Sensor    │──→   │    MQTT      │──→   │  Bridge │──→   │ Kafka   │──→   │  Backend   │
-│ Simulator   │      │   Broker     │      │  (Py)   │      │         │      │ (FastAPI)  │
-└─────────────┘      └──────────────┘      └─────────┘      └─────────┘      └─────┬──────┘
-                                                                                     │
-                                                                                     │ WebSocket
-                                                                                     ▼
-                                                                              ┌────────────┐
-                                                                              │ Frontend   │
-                                                                              │(React+Vite)│
-                                                                              └────────────┘
+Sensor Simulator (Python)
+    ↓ MQTT (1883)
+Mosquitto Broker
+    ↓
+MQTT→Kafka Bridge
+    ↓ Kafka (9092)
+Confluent Cloud / Local Kafka
+    ↓
+FastAPI Backend (Aiokafka Consumer)
+    ↓ WebSocket
+React Dashboard (Real-time UI)
 ```
+**Latency:** ~100-350ms ⚡
 
-## 📋 Yêu cầu
+### **Luồng 2: Analytics** (Batch Processing)
+```
+Confluent Cloud Kafka
+    ↓
+Databricks Cluster (Spark Streaming)
+    ↓ Smart Filtering (Threshold + Max Interval)
+Delta Lake Tables
+    ↓
+Data Analysis & Reports
+```
+**Lợi ích:** 90-95% tiết kiệm storage, phân tích sâu
 
-- **Docker & Docker Compose** (cho MQTT & Kafka)
-- **Python 3.8+**
-- **Node.js 16+** & npm
-- **Git** (tuỳ chọn)
+---
 
-## 🔧 Cấu trúc Thư mục
+## 📁 Cấu trúc Dự Án
 
 ```
 CK3_DTDM/
-├── docker-compose.yml          # Docker orchestration
-├── README.md                    # Documentation
-├── QUICK_START.md              # 5-minute setup
-├── ARCHITECTURE.md             # System design
-├── TROUBLESHOOTING.md          # Problem solving
+├── docker-compose.yml                    # MQTT + Local Kafka
+├── README.md                             # Documentation này
+├── QUICK_START.md                        # Setup nhanh 5 phút
 │
-├── mosquitto/                  # MQTT configuration
-│   └── config/mosquitto.conf
-│
-├── backend/                    # FastAPI Backend (Python)
-│   ├── main.py
+├── sensor/                               # Sensor Simulator
+│   ├── sensor_simulator.py               # 5 sensors: temp, humidity, soil_moisture, light, pressure
 │   └── requirements.txt
 │
-├── bridge/                     # MQTT to Kafka Bridge (Python)
-│   ├── mqtt_kafka_bridge.py
+├── mosquitto/                            # MQTT Message Broker
+│   └── config/mosquitto.conf             # Cấu hình
+│
+├── bridge/                               # MQTT → Kafka Bridge
+│   ├── mqtt_kafka_bridge.py              # Chuyển đổi MQTT → Kafka JSON
 │   └── requirements.txt
 │
-├── sensor/                     # Sensor Simulator (Python)
-│   ├── sensor_simulator.py
+├── backend/                              # FastAPI Backend
+│   ├── main.py                           # WebSocket Server + Kafka Consumer
 │   └── requirements.txt
 │
-└── frontend/                   # React + Vite Frontend
-    ├── package.json
-    ├── vite.config.js
-    ├── public/index.html
-    └── src/
-        ├── main.jsx
-        ├── App.jsx
-        ├── App.css
-        ├── index.css
-        └── components/Dashboard.jsx
-```
-
-## ⚡ Chạy Nhanh (5 phút)
-
-### 1. Khởi động Docker
-```bash
-docker-compose up -d
-sleep 15  # Chờ Kafka khởi động
-```
-
-### 2. Cài đặt & Chạy Các Dịch vụ
-
-**Terminal 1 - Backend:**
-```bash
-cd backend
-pip install -r requirements.txt
-python main.py
-```
-
-**Terminal 2 - Bridge:**
-```bash
-cd bridge
-pip install -r requirements.txt
-python mqtt_kafka_bridge.py
-```
-
-**Terminal 3 - Sensor:**
-```bash
-cd sensor
-pip install -r requirements.txt
-python sensor_simulator.py
-```
-
-**Terminal 4 - Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### 3. Mở Browser
-```
-http://localhost:3000
+├── frontend/                             # React + Vite Dashboard
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── index.html
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── App.css
+│       └── components/Dashboard.jsx
+│
+└── databricks/                           # Analytics (Databricks)
+    └── smart_filtering_kafka_to_delta_fixed.ipynb
+        ├─ Read from Kafka
+        ├─ Smart Filtering (threshold + max interval)
+        └─ Write to Delta Lake
 ```
 
 ---
 
-## 📊 Kiểm tra Hệ thống
+## 📋 Yêu cầu
+
+### **Local Machine**
+- **Docker & Docker Compose** (MQTT, Local Kafka)
+- **Python 3.8+** (Sensor, Bridge, Backend)
+- **Node.js 16+** & npm (Frontend)
+
+### **Cloud (Optional)**
+- **Confluent Cloud** account (Cloud Kafka)
+- **Databricks workspace** (Analytics)
+
+---
+
+## 🔌 Dữ Liệu Cảm Biến
+
+**5 Sensors** (mỗi sensor đo 1 metric):
+
+| Sensor | Loại | Location | Phạm vi | Ngưỡng Databricks |
+|--------|------|----------|---------|-------------------|
+| sensor_1 | Temperature | Living_Room | 15-40°C | ±0.50°C |
+| sensor_2 | Humidity | Living_Room | 20-95% | ±2.00% |
+| sensor_3 | Soil Moisture | Garden | 8-95% | ±3.00% |
+| sensor_4 | Light Intensity | Outdoor | 0-60K lux | ±100 lux |
+| sensor_5 | Pressure | Outdoor | 990-1035 hPa | ±1.00 hPa |
+
+**Format JSON (Kafka/MQTT):**
+```json
+{
+  "timestamp": "2024-01-15T10:30:45.123456",
+  "sensor_id": "sensor_1",
+  "location": "Living_Room",
+  "temperature": 24.5,
+  "humidity": 65.2,
+  "soil_moisture": 55.0,
+  "light_intensity": 500.0,
+  "pressure": 1013.25
+}
+```
+
+---
+
+## 🌐 Ports & Services
+
+| Service | Port | Chứng thực | Mục đích |
+|---------|------|-----------|---------|
+| Mosquitto MQTT | 1883 | Optional | Message Broker |
+| Mosquitto WebSocket | 9001 | No | MQTT over WS |
+| Kafka | 9092 | SASL_SSL | Message Queue |
+| FastAPI | 8000 | No | REST API + WebSocket |
+| React Frontend | 3000 | No | Dashboard UI |
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| **Broker** | Eclipse Mosquitto | Latest |
+| **Queue** | Apache Kafka / Confluent Cloud | 7.5.0 |
+| **Backend** | FastAPI + Aiokafka | 0.104.1 |
+| **Frontend** | React + Vite | 18.2.0 |
+| **Analytics** | Databricks + Spark | Latest |
+| **Storage** | Delta Lake | Latest |
+| **Container** | Docker + Compose | Latest |
+
+---
+
+## 🚀 Quick Start
+
+Xem **[QUICK_START.md](./QUICK_START.md)** để setup trong 5 phút!
+
+---
+
+## 📡 API Endpoints
+
+### REST API
+```bash
+GET  /api/health       # Health check
+GET  /api/status       # System status
+```
+
+### WebSocket
+```
+ws://localhost:8000/ws  # Real-time data stream
+```
+
+### Response Format
+```json
+{
+  "timestamp": "ISO8601",
+  "sensor_id": "sensor_1",
+  "location": "Living_Room",
+  "temperature": 24.5,
+  "humidity": 65.2,
+  "soil_moisture": 55.0,
+  "light_intensity": 500.0,
+  "pressure": 1013.25
+}
+```
+
+---
+
+## 🔍 Monitoring & Troubleshooting
 
 ### Health Check
 ```bash
@@ -116,38 +187,44 @@ curl http://localhost:8000/api/health
 
 ### Test MQTT
 ```bash
-docker-compose exec mosquitto mosquitto_sub -u iot_user -P iot_password -t "sensors/iot/data"
+docker-compose exec mosquitto mosquitto_sub -t "sensors/iot/data"
 ```
 
 ### Test Kafka
 ```bash
-docker-compose exec kafka kafka-console-consumer.sh \
+docker exec <kafka-container> kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 \
-  --topic iot-sensor-data \
-  --from-beginning
+  --topic iot-sensor-data
+```
+
+### Check Logs
+```bash
+docker-compose logs -f mosquitto
+docker-compose logs -f kafka
 ```
 
 ---
 
-## 🌐 Ports & Services
+## 📚 Thêm Thông Tin
 
-| Service | Port | URL |
-|---------|------|-----|
-| Mosquitto MQTT | 1883 | mqtt://localhost:1883 |
-| Kafka | 9092 | kafka://localhost:9092 |
-| FastAPI Backend | 8000 | http://localhost:8000 |
-| React Frontend | 3000 | http://localhost:3000 |
-| WebSocket | 8000 | ws://localhost:8000/ws |
+- **Backend đọc Kafka:** `aiokafka.AIOKafkaConsumer` (async)
+- **Frontend WebSocket:** `useEffect` hook + auto-reconnect
+- **Smart Filtering:** Threshold-based + max-interval rule
+- **Delta Lake:** MERGE operation cho state tracking
 
 ---
 
-## 🛠️ Tech Stack
+## 🎯 Use Cases
 
-- **Message Broker:** Eclipse Mosquitto (MQTT)
-- **Message Queue:** Apache Kafka 7.5.0 (KRaft mode)
-- **Backend:** FastAPI + Aiokafka (Python)
-- **Frontend:** React 18.2.0 + Vite (JavaScript)
-- **Container:** Docker + Docker Compose
+✅ **Real-time Monitoring** - Dashboard cập nhật tức thì
+✅ **Data Analytics** - Phân tích trends trên Databricks
+✅ **Storage Optimization** - Smart filtering giảm 90% dung lượng
+✅ **Alerting** - Có thể thêm alert khi vượt ngưỡng
+✅ **Predictive Maintenance** - ML trên Delta tables
+
+---
+
+**Phát triển bởi:** IoT Team | **Ngày:** 2024
 - **Build Tool:** Vite (lightning-fast build)
 
 ---
