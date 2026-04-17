@@ -410,6 +410,66 @@ async def get_measurements(
         }
 
 
+@app.get("/api/analytics/recent-minutely")
+async def get_recent_minutely(
+    sensor_id: str = Query(..., description="Sensor ID (e.g., sensor_1)"),
+    metric_type: str = Query(..., description="Metric type (e.g., temperature)"),
+    lookback_minutes: int = Query(120, ge=1, le=720, description="Lookback window in minutes"),
+):
+    """Lấy dữ liệu 2 giờ gần nhất (hoặc lookback tùy chọn), gom nhóm theo từng phút."""
+    try:
+        client = get_databricks_client()
+        if not client.is_connected():
+            return {
+                "status": "error",
+                "message": "Databricks not connected",
+                "data": []
+            }
+
+        df = client.query_recent_minutely(
+            sensor_id=sensor_id,
+            metric_type=metric_type,
+            lookback_minutes=lookback_minutes,
+        )
+
+        if df.empty:
+            return {
+                "status": "ok",
+                "message": "No data found",
+                "data": []
+            }
+
+        records = df.to_dict(orient="records")
+
+        for record in records:
+            minute_ts = record.get("minute_ts")
+            if isinstance(minute_ts, pd.Timestamp):
+                record["minute_ts"] = minute_ts.isoformat()
+            elif minute_ts is not None:
+                record["minute_ts"] = str(minute_ts)
+
+            avg_value = record.get("avg_value")
+            if avg_value is not None:
+                try:
+                    record["avg_value"] = float(avg_value)
+                except (TypeError, ValueError):
+                    pass
+
+        return {
+            "status": "ok",
+            "count": len(records),
+            "data": records,
+        }
+
+    except Exception as e:
+        logger.error(f"✗ Error getting recent minutely analytics: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

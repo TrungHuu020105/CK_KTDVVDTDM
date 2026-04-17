@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Analytics from './Analytics'
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 const BASE_DEVICE_CONFIG = [
   {
@@ -110,6 +119,131 @@ const getWebSocketUrl = () => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const backendPort = import.meta.env.VITE_BACKEND_PORT || '8000'
   return `${protocol}//${window.location.hostname}:${backendPort}/ws`
+}
+
+const getAnalyticsApiBase = () => {
+  const configuredUrl = import.meta.env.VITE_ANALYTICS_API_URL?.trim()
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/, '')
+  }
+
+  const protocol = window.location.protocol
+  const backendPort = import.meta.env.VITE_BACKEND_PORT || '8000'
+  return `${protocol}//${window.location.hostname}:${backendPort}/api/analytics`
+}
+
+const padTwoDigits = (value) => String(value).padStart(2, '0')
+
+const parseTimestampParts = (value) => {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const match = value
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: Number(match[6] || '0'),
+  }
+}
+
+const toWallClockDate = (value) => {
+  const parts = parseTimestampParts(value)
+  if (parts) {
+    return new Date(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+      0,
+    )
+  }
+
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+const toMinuteKey = (date) =>
+  `${date.getFullYear()}-${padTwoDigits(date.getMonth() + 1)}-${padTwoDigits(date.getDate())}T${padTwoDigits(date.getHours())}:${padTwoDigits(date.getMinutes())}:00`
+
+const toSortableTime = (value) => {
+  const parsed = toWallClockDate(value)
+  if (!parsed) {
+    return Number.NEGATIVE_INFINITY
+  }
+  return parsed.getTime()
+}
+
+const formatMinuteLabel = (value) =>
+  (() => {
+    const parts = parseTimestampParts(value)
+    if (parts) {
+      return `${padTwoDigits(parts.hour)}:${padTwoDigits(parts.minute)}`
+    }
+
+    const parsed = toWallClockDate(value)
+    if (!parsed) {
+      return '--:--'
+    }
+
+    return `${padTwoDigits(parsed.getHours())}:${padTwoDigits(parsed.getMinutes())}`
+  })()
+
+const aggregateRowsToMinutely = (rows, lookbackMinutes = 120) => {
+  const cutoffMs = Date.now() - lookbackMinutes * 60 * 1000
+  const buckets = new Map()
+
+  rows.forEach((row) => {
+    const rawTs = row?.event_ts
+    const ts = toWallClockDate(rawTs)
+    if (!ts) {
+      return
+    }
+
+    const tsMs = ts.getTime()
+    const metricValue = Number(row?.metric_value)
+
+    if (!Number.isFinite(tsMs) || tsMs < cutoffMs || !Number.isFinite(metricValue)) {
+      return
+    }
+
+    ts.setSeconds(0, 0)
+    const key = toMinuteKey(ts)
+
+    const existing = buckets.get(key) || {
+      minute_ts: key,
+      sum: 0,
+      count: 0,
+      unit: row?.unit || '',
+    }
+
+    existing.sum += metricValue
+    existing.count += 1
+
+    buckets.set(key, existing)
+  })
+
+  return Array.from(buckets.values())
+    .map((item) => ({
+      minute_ts: item.minute_ts,
+      avg_value: item.count > 0 ? item.sum / item.count : null,
+      sample_count: item.count,
+      unit: item.unit,
+    }))
+    .filter((item) => Number.isFinite(item.avg_value))
+    .sort((a, b) => toSortableTime(a.minute_ts) - toSortableTime(b.minute_ts))
 }
 
 const buildAutoCardsFromPayload = (payload, devices) => {
@@ -228,6 +362,10 @@ const Dashboard = () => {
   const [isConnected, setIsConnected] = useState(false)
   const [messageCount, setMessageCount] = useState(0)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [historyModal, setHistoryModal] = useState({ open: false, device: null })
+  const [historyData, setHistoryData] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
   const [newDevice, setNewDevice] = useState({
     title: '',
     source: '',
@@ -239,6 +377,7 @@ const Dashboard = () => {
   const reconnectTimerRef = useRef(null)
   const allDevicesRef = useRef(allDevices)
   const socketUrl = useMemo(() => getWebSocketUrl(), [])
+  const analyticsApiBase = useMemo(() => getAnalyticsApiBase(), [])
 
   useEffect(() => {
     allDevicesRef.current = allDevices
@@ -505,6 +644,136 @@ const Dashboard = () => {
 
   const inactiveDeviceCount = visibleDevices.length - activeDeviceCount
 
+  const historyStats = useMemo(() => {
+    if (!historyData.length) {
+      return null
+    }
+
+    const values = historyData
+      .map((point) => Number(point.value))
+      .filter((value) => Number.isFinite(value))
+
+    if (!values.length) {
+      return null
+    }
+
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const avg = values.reduce((sum, value) => sum + value, 0) / values.length
+
+    return { min, max, avg }
+  }, [historyData])
+
+  const closeHistoryModal = () => {
+    setHistoryModal({ open: false, device: null })
+    setHistoryData([])
+    setHistoryError('')
+    setHistoryLoading(false)
+  }
+
+  const openHistoryModal = async (device) => {
+    setHistoryModal({ open: true, device })
+    setHistoryData([])
+    setHistoryError('')
+    setHistoryLoading(true)
+
+    if (!device?.source || !device?.dataKey) {
+      setHistoryError('Thiết bị chưa có sensor hoặc metric hợp lệ để truy vấn lịch sử')
+      setHistoryLoading(false)
+      return
+    }
+
+    try {
+      const lookbackMinutes = '120'
+      const params = new URLSearchParams({
+        sensor_id: device.source,
+        metric_type: device.dataKey,
+        lookback_minutes: lookbackMinutes,
+      })
+
+      let sourceRows = []
+
+      // Ưu tiên endpoint mới. Nếu backend đang chạy bản cũ (404) thì fallback.
+      const recentResponse = await fetch(
+        `${analyticsApiBase}/recent-minutely?${params.toString()}`,
+      )
+
+      if (recentResponse.ok) {
+        const payload = await recentResponse.json()
+        if (payload.status !== 'ok') {
+          throw new Error(payload.message || 'Không thể lấy dữ liệu lịch sử')
+        }
+        sourceRows = payload.data || []
+      } else {
+        const fallbackParams = new URLSearchParams({
+          sensor_id: device.source,
+          metric_type: device.dataKey,
+          limit: '10000',
+        })
+
+        const fallbackResponse = await fetch(
+          `${analyticsApiBase}/measurements?${fallbackParams.toString()}`,
+        )
+
+        if (!fallbackResponse.ok) {
+          throw new Error(`HTTP ${fallbackResponse.status}`)
+        }
+
+        const fallbackPayload = await fallbackResponse.json()
+        if (fallbackPayload.status !== 'ok') {
+          throw new Error(fallbackPayload.message || 'Không thể lấy dữ liệu fallback')
+        }
+
+        sourceRows = aggregateRowsToMinutely(fallbackPayload.data || [], Number(lookbackMinutes))
+      }
+
+      const normalized = sourceRows
+        .map((item) => {
+          const value = Number(item.avg_value)
+          if (!Number.isFinite(value)) {
+            return null
+          }
+
+          return {
+            time: formatMinuteLabel(item.minute_ts),
+            value,
+            sampleCount: Number(item.sample_count) || 0,
+            rawMinuteTs: item.minute_ts,
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => toSortableTime(a.rawMinuteTs) - toSortableTime(b.rawMinuteTs))
+
+      if (normalized.length === 0) {
+        setHistoryError('Không có dữ liệu trong 2 giờ gần nhất trên Databricks')
+      }
+
+      setHistoryData(normalized)
+    } catch (error) {
+      console.error('History chart error:', error)
+      setHistoryError('Không thể tải chart lịch sử từ Databricks')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const HistoryTooltip = ({ active, payload }) => {
+    if (!active || !payload || payload.length === 0) {
+      return null
+    }
+
+    const point = payload[0].payload
+    return (
+      <div className="history-tooltip">
+        <p>{point.time}</p>
+        <p>
+          Avg: {point.value.toFixed(historyModal.device?.decimals || 2)} {historyModal.device?.unit}
+        </p>
+        <p>Samples: {point.sampleCount}</p>
+      </div>
+    )
+  }
+
   return (
     <div className="dashboard-shell">
       <aside className="sidebar">
@@ -686,7 +955,21 @@ const Dashboard = () => {
                 const value = formatValue(state.value, device.decimals)
 
                 return (
-                  <article className="device-card" key={device.id}>
+                  <article
+                    className="device-card clickable"
+                    key={device.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      openHistoryModal(device)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        openHistoryModal(device)
+                      }
+                    }}
+                  >
                     <div className="card-top">
                       <h2>{device.title}</h2>
                       <span className="top-chip">{device.tag}</span>
@@ -712,17 +995,33 @@ const Dashboard = () => {
                       {state.active ? 'Active' : 'Inactive'}
                     </p>
 
+                    <p className="history-hint">Click to view 2-hour Databricks chart</p>
+
                     <div className="card-actions">
-                      <button type="button" className="action-button alerts">
+                      <button
+                        type="button"
+                        className="action-button alerts"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                        }}
+                      >
                         Alerts
                       </button>
-                      <button type="button" className="action-button edit" disabled>
+                      <button
+                        type="button"
+                        className="action-button edit"
+                        disabled
+                        onClick={(event) => {
+                          event.stopPropagation()
+                        }}
+                      >
                         Edit
                       </button>
                       <button
                         type="button"
                         className="action-button delete"
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.stopPropagation()
                           if (device.isCustom) {
                             handleDeleteCustomDevice(device.id)
                           }
@@ -737,6 +1036,117 @@ const Dashboard = () => {
               })}
             </section>
           </>
+        ) : null}
+
+        {historyModal.open ? (
+          <div
+            className="history-modal-backdrop"
+            onClick={() => {
+              closeHistoryModal()
+            }}
+          >
+            <section
+              className="history-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Device history chart"
+              onClick={(event) => {
+                event.stopPropagation()
+              }}
+            >
+              <div className="history-modal-head">
+                <div>
+                  <h3>{historyModal.device?.title} • 2 giờ gần nhất</h3>
+                  <p>
+                    {historyModal.device?.source} • {historyModal.device?.dataKey}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="history-close-btn"
+                  onClick={() => {
+                    closeHistoryModal()
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {historyLoading ? (
+                <div className="history-loading">Đang tải dữ liệu từ Databricks...</div>
+              ) : null}
+
+              {!historyLoading && historyError ? (
+                <div className="history-error">{historyError}</div>
+              ) : null}
+
+              {!historyLoading && !historyError && historyData.length > 0 ? (
+                <div className="history-chart-wrap">
+                  <ResponsiveContainer width="100%" height={320}>
+                    <LineChart data={historyData} margin={{ top: 12, right: 16, left: 0, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(112, 138, 198, 0.22)" />
+                      <XAxis
+                        dataKey="time"
+                        tick={{ fontSize: 11, fill: '#94a8d8' }}
+                        axisLine={{ stroke: 'rgba(112, 138, 198, 0.35)' }}
+                        tickLine={{ stroke: 'rgba(112, 138, 198, 0.35)' }}
+                        interval={9}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 12, fill: '#94a8d8' }}
+                        axisLine={{ stroke: 'rgba(112, 138, 198, 0.35)' }}
+                        tickLine={{ stroke: 'rgba(112, 138, 198, 0.35)' }}
+                      />
+                      <Tooltip content={<HistoryTooltip />} />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#19dbff"
+                        strokeWidth={2.2}
+                        dot={{ r: 1.8, fill: '#19dbff' }}
+                        activeDot={{ r: 4 }}
+                        isAnimationActive={true}
+                        animationDuration={450}
+                        name="Avg per minute"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+
+                  {historyStats ? (
+                    <div className="history-stats-grid">
+                      <article className="history-stat-card">
+                        <p>Min</p>
+                        <strong>
+                          {historyStats.min.toFixed(historyModal.device?.decimals || 2)}{' '}
+                          {historyModal.device?.unit}
+                        </strong>
+                      </article>
+
+                      <article className="history-stat-card">
+                        <p>Max</p>
+                        <strong>
+                          {historyStats.max.toFixed(historyModal.device?.decimals || 2)}{' '}
+                          {historyModal.device?.unit}
+                        </strong>
+                      </article>
+
+                      <article className="history-stat-card">
+                        <p>Avg</p>
+                        <strong>
+                          {historyStats.avg.toFixed(historyModal.device?.decimals || 2)}{' '}
+                          {historyModal.device?.unit}
+                        </strong>
+                      </article>
+                    </div>
+                  ) : null}
+
+                  <p className="history-note">
+                    Mỗi điểm là trung bình của 1 phút trong 2 giờ gần nhất.
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          </div>
         ) : null}
 
         <footer className="workspace-footer">

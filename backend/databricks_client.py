@@ -29,6 +29,10 @@ DATABRICKS_TARGET_TABLE = os.getenv("DATABRICKS_TARGET_TABLE")
 TARGET_TABLE = DATABRICKS_TARGET_TABLE or f"{DATABRICKS_SCHEMA}.{DATABRICKS_TABLE}"
 
 
+def _escape_sql_literal(value: str) -> str:
+    return str(value).replace("'", "''")
+
+
 class DatabricksClient:
     """Client để kết nối và truy vấn Databricks"""
     
@@ -240,6 +244,62 @@ class DatabricksClient:
             logger.error(f"❌ Lỗi lấy thông tin bảng: {e}")
         
         return {}
+
+    def query_recent_minutely(
+        self,
+        sensor_id: str,
+        metric_type: str,
+        lookback_minutes: int = 120,
+    ) -> pd.DataFrame:
+        """Lấy dữ liệu 2 giờ gần nhất (hoặc lookback tuỳ chọn), trung bình theo từng phút."""
+        if not self.is_connected():
+            logger.error("❌ Databricks chưa kết nối")
+            return pd.DataFrame()
+
+        safe_sensor_id = _escape_sql_literal(sensor_id or "")
+        safe_metric_type = _escape_sql_literal(metric_type or "")
+
+        if not safe_sensor_id or not safe_metric_type:
+            return pd.DataFrame()
+
+        try:
+            bounded_lookback = max(1, min(int(lookback_minutes), 720))
+        except (TypeError, ValueError):
+            bounded_lookback = 120
+
+        try:
+            query = f"""
+            SELECT
+                DATE_TRUNC('minute', event_ts) AS minute_ts,
+                AVG(metric_value) AS avg_value,
+                COUNT(*) AS sample_count,
+                MAX(unit) AS unit
+            FROM {TARGET_TABLE}
+            WHERE sensor_id = '{safe_sensor_id}'
+              AND metric_type = '{safe_metric_type}'
+              AND event_ts >= CURRENT_TIMESTAMP() - INTERVAL {bounded_lookback} MINUTES
+            GROUP BY DATE_TRUNC('minute', event_ts)
+            ORDER BY minute_ts ASC
+            """
+
+            with self.connection.cursor() as cursor:
+                cursor.execute(query)
+                result = cursor.fetchall()
+
+                if not result:
+                    return pd.DataFrame()
+
+                columns = [desc[0] for desc in cursor.description]
+                df = pd.DataFrame(result, columns=columns)
+
+                if "minute_ts" in df.columns:
+                    df["minute_ts"] = df["minute_ts"].astype(str)
+
+                return df
+
+        except Exception as e:
+            logger.error(f"❌ Lỗi query_recent_minutely: {e}")
+            return pd.DataFrame()
     
     def close(self):
         """Đóng kết nối"""
