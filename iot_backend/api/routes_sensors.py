@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from iot_backend.api.routes_auth import get_current_user
 from iot_backend.database import get_db
 from iot_backend.models import IoTDevice, SensorReading, User
-from iot_backend.services.sensor_reading_service import create_sensor_reading, serialize_reading
-from iot_backend.services.weather_service import geocode_location
+from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
+from iot_backend.services.weather_service import geocode_location, get_virtual_weather_readings
 
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
 VN_TZ = timezone(timedelta(hours=7))
@@ -119,6 +119,21 @@ class SensorReadingRequest(BaseModel):
 
 class GeocodeRequest(BaseModel):
     location_query: str
+
+
+def _ensure_coordinates_for_device(device: IoTDevice, db: Session) -> None:
+    if device.latitude is not None and device.longitude is not None:
+        return
+
+    query = device.location_query or device.location_province or device.location
+    geo = geocode_location(query) if query else None
+    if not geo:
+        raise HTTPException(status_code=400, detail="Sensor location has no coordinates")
+
+    device.latitude = geo.latitude
+    device.longitude = geo.longitude
+    device.timezone_name = geo.timezone
+    db.flush()
 
 
 @router.get("")
@@ -280,4 +295,74 @@ def geocode_sensor_location(payload: GeocodeRequest, user: User = Depends(get_cu
         "timezone": geo.timezone,
         "latitude": geo.latitude,
         "longitude": geo.longitude,
+    }
+
+
+@router.post("/{sensor_id}/sync-meteostat")
+def sync_virtual_meteostat_sensor(
+    sensor_id: str,
+    hours: int = Query(24, ge=1, le=720),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
+    if not device or (user.role != "admin" and device.user_id != user.id):
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    if device.source_type != "virtual_meteostat":
+        raise HTTPException(status_code=400, detail="Only virtual Meteostat sensors can be synced")
+    if device.environment_type != "outdoor":
+        raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
+
+    _ensure_coordinates_for_device(device, db)
+    readings, provider = get_virtual_weather_readings(
+        latitude=device.latitude,
+        longitude=device.longitude,
+        hours=hours,
+        timezone=device.timezone_name or "auto",
+    )
+    if not readings:
+        raise HTTPException(status_code=502, detail="No weather readings available for this location")
+
+    inserted = 0
+    skipped = 0
+    latest_row = None
+    for item in readings:
+        event_ts = item.get("timestamp")
+        resolved_ts = parse_event_ts(event_ts)
+        exists = (
+            db.query(SensorReading)
+            .filter(SensorReading.sensor_id == device.source, SensorReading.event_ts == resolved_ts)
+            .first()
+        )
+        if exists:
+            skipped += 1
+            latest_row = exists
+            continue
+
+        latest_row = create_sensor_reading(
+            db,
+            sensor_id=device.source,
+            event_ts=resolved_ts,
+            temperature=item.get("temperature"),
+            humidity=item.get("humidity"),
+            source_type="virtual_meteostat",
+            provider=item.get("provider") or provider,
+            environment_type="outdoor",
+            location=device.location,
+            location_province=device.location_province,
+            latitude=device.latitude,
+            longitude=device.longitude,
+        )
+        inserted += 1
+
+    db.commit()
+    if latest_row:
+        db.refresh(latest_row)
+    return {
+        "sensor_id": device.source,
+        "provider": provider,
+        "inserted": inserted,
+        "skipped_duplicates": skipped,
+        "latest_reading": serialize_reading(latest_row) if latest_row else None,
+        "message": f"Synced {inserted} readings from {provider}",
     }

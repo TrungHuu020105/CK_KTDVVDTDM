@@ -4,7 +4,6 @@ import { DeviceProvider } from './context/DeviceContext'
 import { NotificationProvider } from './context/NotificationContext'
 import api from './api'
 import Sidebar from './components/Sidebar'
-import Dashboard from './components/Dashboard'
 import UserDashboard from './components/UserDashboard'
 import AdminDashboard from './components/AdminDashboard'
 import CPUMetrics from './components/CPUMetrics'
@@ -50,7 +49,7 @@ function AppContent() {
         if (user?.role === 'admin') {
           return <AdminDashboard />
         } else {
-          return <IoTDeviceManager />
+          return <UserDashboard />
         }
       case 'iot-devices':
         return <IoTDeviceManager />

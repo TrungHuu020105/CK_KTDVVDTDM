@@ -43,3 +43,23 @@ Tao cac bang Delta trong Unity Catalog/schema da cau hinh:
 
 Backend ghi Bronze qua Databricks SQL Connector khi `DATABRICKS_ENABLED=true`.
 
+## 6. Cach demo tren giao dien
+
+- Vao `Sensors` de xem dashboard moi.
+- `How to use this demo` giai thich thu tu thao tac khi bao cao.
+- `Lakehouse flow` giai thich luong ESP32/Meteostat -> backend write kieu A -> Databricks Bronze/Silver/Gold -> frontend.
+- `Model Lab` cho biet model duoc danh gia trong Databricks, ket qua nam o `model_evaluation_results`, forecast nam o `forecast_results`.
+- Voi sensor `Virtual Meteostat`, bam `Sync Meteostat` de nap du lieu nhiet do/do am theo tinh thanh.
+- Voi sensor `Physical IoT`, gui MQTT tu ESP32; nut `Manual Demo Reading` chi dung de smoke test giao dien/backend khi chua cam thiet bi.
+- Bam `Analytics and Models` de xem chart actual/forecast va bang MAE/RMSE chon best model.
+
+## 7. Chay realtime demo data
+
+Neu chua cam ESP32/MQTT that, chay producer API nay de UI cap nhat realtime:
+
+```powershell
+python scripts\stream_sensor_readings.py --interval 3
+```
+
+Script nay moi 3 giay se ghi mot reading moi cho moi sensor, trong do mot dong co ca `temperature` va `humidity`.
+

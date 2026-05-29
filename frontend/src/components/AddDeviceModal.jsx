@@ -86,7 +86,7 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
             <Plus className="w-6 h-6 text-neon-cyan" />
-            Add Sensor
+            Add Device
           </h2>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
             <X className="w-6 h-6" />
@@ -95,12 +95,12 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Sensor name</label>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Device name</label>
             <input name="name" value={formData.name} onChange={handleChange} placeholder="Greenhouse Sensor 01" className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60" />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Sensor ID</label>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Device / Sensor ID</label>
             <input name="source" value={formData.source} onChange={handleChange} placeholder="esp32_devkit_v1 or virtual_meteostat_hcm" className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60 font-mono" />
           </div>
 
@@ -146,7 +146,7 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
           <div className="flex gap-3 pt-4">
             <button type="button" onClick={onClose} className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-all">Cancel</button>
             <button type="submit" disabled={isLoading} className="flex-1 px-4 py-2 bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 rounded-lg hover:border-neon-cyan transition-all disabled:opacity-50">
-              {isLoading ? 'Adding...' : 'Add Sensor'}
+              {isLoading ? 'Adding...' : 'Add Device'}
             </button>
           </div>
         </form>

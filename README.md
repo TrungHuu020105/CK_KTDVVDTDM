@@ -8,6 +8,7 @@ Trong phien ban nay, he thong tap trung vao kien truc dich vu cho IoT, Databrick
 - Giam sat realtime nhiet do va do am tu cam bien ESP32/DHT11.
 - Chuan hoa mot `sensor_id` thanh mot sensor duy nhat, moi reading gom ca `temperature` va `humidity`.
 - Ho tro `Virtual Meteostat Sensor` de mo phong cam bien IoT ngoai troi theo tinh/thanh.
+- Virtual Meteostat sensor co nut sync tren frontend de nap hourly temperature/humidity vao pipeline nhu mot IoT thuc.
 - Ghi du lieu sensor-level vao Databricks Bronze table theo kieu backend write truc tiep.
 - Databricks dam nhiem data lakehouse, ETL, feature table, training/evaluation va forecast result.
 - Frontend hien thi sensor card, forecast chart va model leaderboard.
@@ -101,10 +102,29 @@ DELETE /api/sensors/{sensor_id}
 POST   /api/sensors/readings
 GET    /api/sensors/{sensor_id}/latest
 GET    /api/sensors/{sensor_id}/history
+POST   /api/sensors/{sensor_id}/sync-meteostat
 GET    /api/sensors/{sensor_id}/forecast
 GET    /api/sensors/{sensor_id}/model-leaderboard
 GET    /api/sensors/databricks/status
 ```
+
+## Demo flow tren frontend
+
+1. Vao menu `Sensors`.
+2. Tao `Physical ESP32` neu demo indoor bang thiet bi that, hoac tao `Virtual Meteostat` neu can du lieu outdoor theo tinh/thanh.
+3. Voi virtual sensor, bam `Sync Meteostat` de backend lay hourly temperature/humidity va ghi vao `sensor_readings` + Databricks Bronze.
+4. Chay notebook Databricks theo thu tu `01_create_lakehouse_tables` -> `02_clean_bronze_to_silver` -> `03_build_gold_sensor_features` -> `04_train_compare_models`.
+5. Bam `Analytics and Models` tren sensor card de xem actual chart, forecast chart va leaderboard MAE/RMSE tu `model_evaluation_results`.
+
+### Local realtime producer
+
+Khi chua co ESP32/MQTT that, co the stream du lieu demo vao API theo schema moi:
+
+```powershell
+python scripts\stream_sensor_readings.py --interval 3
+```
+
+Moi batch se tao mot `sensor_readings` row cho tung sensor, gom ca `temperature` va `humidity`, nen frontend se cap nhat theo polling realtime.
 
 ## Databricks notebooks nen co
 

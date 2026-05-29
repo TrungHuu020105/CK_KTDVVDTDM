@@ -437,6 +437,31 @@ async def toggle_notification_target(
     return {"success": True, "is_enabled": row.is_enabled}
 
 
+@router.post("/notifications/targets/{target_id}/test")
+async def test_notification_target(
+    target_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(UserNotificationTarget).filter(
+        UserNotificationTarget.id == target_id,
+        UserNotificationTarget.user_id == current_user.id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    if row.target_type == "telegram":
+        ok, detail = send_telegram_message(row.target_value, "Test alert from MetricsPulse.")
+    elif row.target_type == "email":
+        ok, detail = send_email_alert(row.target_value, "MetricsPulse alert test", "<h3>Test email</h3><p>Email alert channel is working.</p>")
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported target type")
+
+    if not ok:
+        raise HTTPException(status_code=400, detail=detail)
+    return {"success": True, "message": "Test notification sent"}
+
+
 @router.delete("/notifications/targets/{target_id}")
 async def delete_notification_target(
     target_id: int,
@@ -452,4 +477,3 @@ async def delete_notification_target(
     db.delete(row)
     db.commit()
     return {"success": True}
-

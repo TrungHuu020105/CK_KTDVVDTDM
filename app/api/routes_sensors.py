@@ -144,6 +144,16 @@ async def history(sensor_id: str, request: Request, minutes: int = 120, current_
     return proxy_iot_backend("GET", f"/api/sensors/{sensor_id}/history?minutes={minutes}", bearer_token=extract_bearer_token(request))
 
 
+@router.post("/{sensor_id}/sync-meteostat")
+async def sync_meteostat(sensor_id: str, request: Request, hours: int = 24, current_user=Depends(get_current_user)):
+    _ = current_user
+    return proxy_iot_backend(
+        "POST",
+        f"/api/sensors/{sensor_id}/sync-meteostat?hours={hours}",
+        bearer_token=extract_bearer_token(request),
+    )
+
+
 @router.get("/{sensor_id}/forecast")
 async def forecast(sensor_id: str, current_user=Depends(get_current_user)):
     _ = current_user

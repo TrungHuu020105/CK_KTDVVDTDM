@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from urllib import parse as urlparse
@@ -130,6 +130,89 @@ def get_current_weather(latitude: float, longitude: float, timezone: str = "auto
     }
 
 
+def get_meteostat_hourly_readings(latitude: float, longitude: float, hours: int = 24) -> list[dict]:
+    """Fetch hourly temperature/humidity rows from the Meteostat Python library.
+
+    Meteostat hourly data exposes `temp` (Celsius) and `rhum` (relative humidity).
+    If the optional dependency is not installed or no historical rows are
+    available yet, callers can fall back to Open-Meteo current weather.
+    """
+    if latitude is None or longitude is None:
+        return []
+
+    try:
+        from meteostat import Hourly, Point
+    except ImportError:
+        return []
+
+    end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(hours=max(1, min(int(hours or 24), 720)))
+
+    try:
+        data = Hourly(Point(float(latitude), float(longitude)), start, end).fetch()
+    except Exception:
+        return []
+
+    if data is None or data.empty:
+        return []
+
+    def _clean_number(value):
+        if value is None:
+            return None
+        try:
+            if value != value:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    rows: list[dict] = []
+    frame = data.reset_index()
+    for _, row in frame.iterrows():
+        temperature = _clean_number(row.get("temp"))
+        humidity = _clean_number(row.get("rhum"))
+        if temperature is None and humidity is None:
+            continue
+        event_ts = row.get("time")
+        if hasattr(event_ts, "to_pydatetime"):
+            event_ts = event_ts.to_pydatetime()
+        rows.append({
+            "timestamp": event_ts,
+            "temperature": temperature,
+            "humidity": humidity,
+            "provider": "meteostat",
+        })
+    return rows
+
+
+def get_virtual_weather_readings(
+    latitude: float,
+    longitude: float,
+    hours: int = 24,
+    timezone: str = "auto",
+) -> tuple[list[dict], str]:
+    """Return readings for a virtual outdoor sensor.
+
+    Primary source is Meteostat historical hourly observations. For a smooth
+    classroom demo, Open-Meteo current weather is used as a one-row fallback
+    when Meteostat has no recent rows or the optional library is missing.
+    """
+    rows = get_meteostat_hourly_readings(latitude=latitude, longitude=longitude, hours=hours)
+    if rows:
+        return rows, "meteostat"
+
+    current = get_current_weather(latitude=latitude, longitude=longitude, timezone=timezone)
+    if not current:
+        return [], "none"
+
+    return ([{
+        "timestamp": current.get("time") or datetime.utcnow(),
+        "temperature": current.get("temperature_2m"),
+        "humidity": current.get("relative_humidity_2m"),
+        "provider": "open_meteo_current_fallback",
+    }], "open_meteo_current_fallback")
+
+
 def get_weather_for_timestamp(
     latitude: float,
     longitude: float,
@@ -201,4 +284,3 @@ def get_weather_for_timestamp(
         "weather_code": _val("weather_code"),
         "wind_speed_10m": _val("wind_speed_10m"),
     }
-
