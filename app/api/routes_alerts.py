@@ -57,34 +57,47 @@ async def create_alert(
 
 @router.get("/alerts", response_model=AlertListResponse)
 async def get_alerts(
+    request: Request,
     hours: int = Query(24, ge=1, le=720, description="Last N hours to fetch alerts"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of alerts"),
+    current_user=Depends(get_current_user),
 ):
+    _ = current_user
     query = urlencode({"hours": hours, "limit": limit})
-    return proxy_iot_backend("GET", f"/api/alerts?{query}")
+    return proxy_iot_backend("GET", f"/api/alerts?{query}", bearer_token=extract_bearer_token(request))
 
 
 @router.get("/alerts/recent", response_model=AlertListResponse)
 async def get_recent_alerts(
+    request: Request,
     hours: int = Query(24, ge=1, le=720, description="Last N hours to fetch alerts"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of alerts"),
+    current_user=Depends(get_current_user),
 ):
+    _ = current_user
     query = urlencode({"hours": hours, "limit": limit})
-    return proxy_iot_backend("GET", f"/api/alerts/recent?{query}")
+    return proxy_iot_backend("GET", f"/api/alerts/recent?{query}", bearer_token=extract_bearer_token(request))
 
 
 @router.get("/alerts/unresolved", response_model=AlertListResponse)
-async def get_unresolved_alerts():
-    return proxy_iot_backend("GET", "/api/alerts/unresolved")
+async def get_unresolved_alerts(
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    _ = current_user
+    return proxy_iot_backend("GET", "/api/alerts/unresolved", bearer_token=extract_bearer_token(request))
 
 
 @router.get("/alerts/by-metric/{metric_type}", response_model=AlertListResponse)
 async def get_alerts_by_metric(
+    request: Request,
     metric_type: str,
     hours: int = Query(24, ge=1, le=720, description="Last N hours"),
+    current_user=Depends(get_current_user),
 ):
+    _ = current_user
     query = urlencode({"hours": hours})
-    return proxy_iot_backend("GET", f"/api/alerts/by-metric/{metric_type}?{query}")
+    return proxy_iot_backend("GET", f"/api/alerts/by-metric/{metric_type}?{query}", bearer_token=extract_bearer_token(request))
 
 
 @router.patch("/alerts/{alert_id}/resolve", response_model=AlertResponse)
@@ -101,10 +114,13 @@ async def resolve_alert(
 
 @router.delete("/alerts/cleanup")
 async def cleanup_old_alerts(
+    request: Request,
     days: int = Query(30, ge=1, le=365, description="Delete alerts older than N days"),
+    current_user=Depends(get_current_user),
 ):
+    _ = current_user
     query = urlencode({"days": days})
-    return proxy_iot_backend("DELETE", f"/api/alerts/cleanup?{query}")
+    return proxy_iot_backend("DELETE", f"/api/alerts/cleanup?{query}", bearer_token=extract_bearer_token(request))
 
 
 @router.get("/alerts/{alert_id}/explain-ai")

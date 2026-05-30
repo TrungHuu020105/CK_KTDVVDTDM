@@ -1,6 +1,5 @@
-"""API routes for alerts endpoints"""
+"""API routes for alerts endpoints."""
 
-from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from iot_backend.database import get_db
@@ -16,6 +15,38 @@ from iot_backend.services.ai_explanation_service import explain_alert_with_gemin
 from iot_backend.services.weather_service import get_weather_for_timestamp
 
 router = APIRouter(prefix="/api", tags=["alerts"])
+
+
+def _owned_iot_device_ids(db: Session, user_id: int) -> set[int]:
+    rows = db.query(IoTDevice.id).filter(IoTDevice.user_id == user_id).all()
+    return {row[0] for row in rows}
+
+
+def _filter_alerts_by_user(db: Session, current_user: User, alerts: list[Alert]) -> list[Alert]:
+    if current_user.role == "admin":
+        return alerts
+    owned_device_ids = _owned_iot_device_ids(db, current_user.id)
+    accessible_sources = set(crud.get_user_accessible_sources(db, current_user.id))
+    visible: list[Alert] = []
+    for alert in alerts:
+        if alert.device_id is not None:
+            if alert.device_id in owned_device_ids:
+                visible.append(alert)
+            continue
+        if alert.source in accessible_sources:
+            visible.append(alert)
+    return visible
+
+
+def _ensure_alert_access(db: Session, current_user: User, alert: Alert) -> None:
+    if current_user.role == "admin":
+        return
+    owned_device_ids = _owned_iot_device_ids(db, current_user.id)
+    if alert.device_id is not None and alert.device_id in owned_device_ids:
+        return
+    accessible_sources = set(crud.get_user_accessible_sources(db, current_user.id))
+    if alert.source not in accessible_sources:
+        raise HTTPException(status_code=403, detail="You do not have access to this alert")
 
 
 @router.post("/alerts", response_model=AlertResponse, status_code=201)
@@ -44,10 +75,12 @@ async def create_alert(
 async def get_alerts(
     hours: int = Query(24, ge=1, le=720, description="Last N hours to fetch alerts"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of alerts"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Backward-compatible endpoint for dashboards expecting GET /api/alerts."""
     alerts = crud.get_recent_alerts(db, hours=hours, limit=limit)
+    alerts = _filter_alerts_by_user(db, current_user, alerts)
     return {
         "alerts": alerts,
         "count": len(alerts)
@@ -58,10 +91,12 @@ async def get_alerts(
 async def get_recent_alerts(
     hours: int = Query(24, ge=1, le=720, description="Last N hours to fetch alerts"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of alerts"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get recent alerts from last N hours"""
     alerts = crud.get_recent_alerts(db, hours=hours, limit=limit)
+    alerts = _filter_alerts_by_user(db, current_user, alerts)
     return {
         "alerts": alerts,
         "count": len(alerts)
@@ -70,10 +105,12 @@ async def get_recent_alerts(
 
 @router.get("/alerts/unresolved", response_model=AlertListResponse)
 async def get_unresolved_alerts(
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all unresolved alerts (currently active)"""
     alerts = crud.get_unresolved_alerts(db)
+    alerts = _filter_alerts_by_user(db, current_user, alerts)
     return {
         "alerts": alerts,
         "count": len(alerts)
@@ -84,6 +121,7 @@ async def get_unresolved_alerts(
 async def get_alerts_by_metric(
     metric_type: str,
     hours: int = Query(24, ge=1, le=720, description="Last N hours"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get alerts for a specific metric type"""
@@ -99,6 +137,7 @@ async def get_alerts_by_metric(
         )
     
     alerts = crud.get_alerts_by_metric(db, metric_type, hours=hours)
+    alerts = _filter_alerts_by_user(db, current_user, alerts)
     return {
         "alerts": alerts,
         "count": len(alerts)
@@ -108,9 +147,17 @@ async def get_alerts_by_metric(
 @router.patch("/alerts/{alert_id}/resolve", response_model=AlertResponse)
 async def resolve_alert(
     alert_id: int,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Mark an alert as resolved"""
+    existing = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not existing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Alert with id {alert_id} not found"
+        )
+    _ensure_alert_access(db, current_user, existing)
     alert = crud.resolve_alert(db, alert_id)
     
     if not alert:
@@ -125,9 +172,12 @@ async def resolve_alert(
 @router.delete("/alerts/cleanup")
 async def cleanup_old_alerts(
     days: int = Query(30, ge=1, le=365, description="Delete alerts older than N days"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete resolved alerts older than specified days (maintenance)"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can cleanup alerts")
     deleted_count = crud.delete_old_alerts(db, days=days)
     return {
         "status": "success",
@@ -145,10 +195,7 @@ async def explain_alert_with_ai(
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
-
-    accessible_sources = crud.get_user_accessible_sources(db, current_user.id)
-    if current_user.role != "admin" and alert.source not in accessible_sources:
-        raise HTTPException(status_code=403, detail="You do not have access to this alert")
+    _ensure_alert_access(db, current_user, alert)
 
     device = db.query(IoTDevice).filter(IoTDevice.source == alert.source).first()
     environment_type = (device.environment_type if device and device.environment_type else "indoor").lower()
@@ -218,4 +265,3 @@ async def explain_alert_with_ai(
             "weather_fetch_error": weather_fetch_error,
         },
     }
-

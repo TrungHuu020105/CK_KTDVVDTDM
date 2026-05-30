@@ -62,6 +62,59 @@ function stat(rows, key, mode) {
   return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
+function minuteKey(value) {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  d.setSeconds(0, 0)
+  return d.toISOString()
+}
+
+function minuteLabel(value) {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '--'
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function toMinuteChartData(historyRows, forecastRows) {
+  const map = new Map()
+
+  for (const row of historyRows || []) {
+    const rawTs = row.timestamp || row.event_ts
+    const key = minuteKey(rawTs)
+    if (!key) continue
+    const current = map.get(key) || {
+      timestamp: key,
+      time: minuteLabel(key),
+      temperature: null,
+      humidity: null,
+      forecast_temperature: null,
+      forecast_humidity: null,
+    }
+    current.temperature = row.temperature ?? current.temperature
+    current.humidity = row.humidity ?? current.humidity
+    map.set(key, current)
+  }
+
+  for (const row of (forecastRows || []).slice(0, 12)) {
+    const rawTs = row.forecast_ts || row.timestamp || row.event_ts
+    const key = minuteKey(rawTs)
+    if (!key) continue
+    const current = map.get(key) || {
+      timestamp: key,
+      time: minuteLabel(key),
+      temperature: null,
+      humidity: null,
+      forecast_temperature: null,
+      forecast_humidity: null,
+    }
+    current.forecast_temperature = row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : current.forecast_temperature)
+    current.forecast_humidity = row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : current.forecast_humidity)
+    map.set(key, current)
+  }
+
+  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+}
+
 export default function IoTDeviceManager() {
   const { sensors, fetchSensors, createSensor, deleteSensor, loading } = useDevices()
   const { user } = useAuth()
@@ -284,25 +337,7 @@ export default function IoTDeviceManager() {
       showToast(err.response?.data?.detail || 'Could not send manual command', 'error')
     }
   }
-  const chartData = useMemo(() => {
-    const actual = (history || []).map((row) => ({
-      time: onlyTime(row.timestamp || row.event_ts),
-      timestamp: row.timestamp || row.event_ts,
-      temperature: row.temperature,
-      humidity: row.humidity,
-      forecast_temperature: null,
-      forecast_humidity: null,
-    }))
-    const predicted = (forecast || []).slice(0, 12).map((row) => ({
-      time: onlyTime(row.forecast_ts || row.timestamp || row.event_ts),
-      timestamp: row.forecast_ts || row.timestamp || row.event_ts,
-      temperature: null,
-      humidity: null,
-      forecast_temperature: row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : null),
-      forecast_humidity: row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : null),
-    }))
-    return [...actual, ...predicted].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-  }, [history, forecast])
+  const chartData = useMemo(() => toMinuteChartData(history, forecast), [history, forecast])
 
   return (
     <div className="min-h-screen bg-dark-900 p-8">
@@ -557,37 +592,37 @@ function SensorChartModal({ sensor, latest, history, forecast, chartData, loadin
   const humMax = stat(history, 'humidity', 'max')
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 p-6 overflow-y-auto">
-      <div className="bg-dark-800 border border-neon-cyan/30 rounded-xl p-8 max-w-7xl mx-auto">
-        <div className="flex justify-between items-start mb-8">
+    <div className="fixed inset-0 bg-black/80 z-50 p-4 overflow-y-auto">
+      <div className="bg-dark-800 border border-neon-cyan/30 rounded-xl p-5 md:p-6 max-w-5xl mx-auto">
+        <div className="flex justify-between items-start mb-6">
           <div>
-            <h2 className="text-3xl font-bold text-white mb-2">{sensor.name}</h2>
+            <h2 className="text-2xl font-bold text-white mb-2">{sensor.name}</h2>
             <p className="text-gray-400">Last 2 hours of temperature and humidity data</p>
-            <p className="text-yellow-300 text-sm mt-2">Includes short forecast when Databricks forecast rows are available</p>
-            <p className="text-gray-500 text-sm mt-2">Forecast points: {forecast.length}</p>
+            <p className="text-yellow-300 text-sm mt-1">Khoảng cách điểm dữ liệu: 1 phút</p>
+            <p className="text-gray-500 text-sm mt-1">Forecast points: {forecast.length}</p>
             <p className="text-gray-500 text-sm">Updated: {latest.timestamp || latest.event_ts ? formatVNTime(latest.timestamp || latest.event_ts, true) : '--'}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
-            <X className="w-8 h-8" />
+            <X className="w-7 h-7" />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <StatBox label="Average" temp={tempAvg} humidity={humAvg} color="cyan" />
           <StatBox label="Minimum" temp={tempMin} humidity={humMin} color="green" />
           <StatBox label="Maximum" temp={tempMax} humidity={humMax} color="orange" />
         </div>
 
-        <div className="rounded-lg border border-gray-700 bg-dark-900/40 p-5">
+        <div className="rounded-lg border border-gray-700 bg-dark-900/40 p-4">
           {loading ? (
-            <div className="h-[440px] flex items-center justify-center text-gray-400">Loading chart...</div>
+            <div className="h-[340px] flex items-center justify-center text-gray-400">Loading chart...</div>
           ) : chartData.length === 0 ? (
-            <div className="h-[440px] flex items-center justify-center text-gray-400">No realtime data yet.</div>
+            <div className="h-[340px] flex items-center justify-center text-gray-400">No realtime data yet.</div>
           ) : (
-            <ResponsiveContainer width="100%" height={440}>
+            <ResponsiveContainer width="100%" height={340}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="4 4" stroke="#2a365d" />
-                <XAxis dataKey="time" stroke="#9CA3AF" tick={{ fontSize: 12 }} />
+                <XAxis dataKey="time" stroke="#9CA3AF" tick={{ fontSize: 11 }} minTickGap={18} />
                 <YAxis yAxisId="temp" stroke="#9CA3AF" tick={{ fontSize: 12 }} label={{ value: '°C', angle: -90, position: 'insideLeft', fill: '#9CA3AF' }} />
                 <YAxis yAxisId="hum" orientation="right" stroke="#9CA3AF" tick={{ fontSize: 12 }} label={{ value: '%', angle: 90, position: 'insideRight', fill: '#9CA3AF' }} />
                 <Tooltip contentStyle={{ backgroundColor: '#111827', border: '1px solid #00f0ff', borderRadius: 8 }} />
@@ -601,7 +636,7 @@ function SensorChartModal({ sensor, latest, history, forecast, chartData, loadin
           )}
         </div>
 
-        <button onClick={onClose} className="w-full mt-8 px-5 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500">Close</button>
+        <button onClick={onClose} className="w-full mt-6 px-5 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500">Close</button>
       </div>
     </div>
   )
@@ -611,15 +646,15 @@ function StatBox({ label, temp, humidity, color }) {
   const border = color === 'green' ? 'border-green-400/40' : color === 'orange' ? 'border-orange-400/40' : 'border-neon-cyan/40'
   const text = color === 'green' ? 'text-neon-green' : color === 'orange' ? 'text-neon-orange' : 'text-neon-cyan'
   return (
-    <div className={`rounded-lg border ${border} bg-dark-900/40 p-5`}>
-      <p className="text-gray-400 mb-3">{label}</p>
+    <div className={`rounded-lg border ${border} bg-dark-900/40 p-4`}>
+      <p className="text-gray-400 mb-2">{label}</p>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <p className={`text-3xl font-bold ${text}`}>{fmt(temp, ' °C')}</p>
+          <p className={`text-2xl font-bold ${text}`}>{fmt(temp, ' °C')}</p>
           <p className="text-xs text-gray-500 mt-1">Temperature</p>
         </div>
         <div>
-          <p className="text-3xl font-bold text-sky-300">{fmt(humidity, '%')}</p>
+          <p className="text-2xl font-bold text-sky-300">{fmt(humidity, '%')}</p>
           <p className="text-xs text-gray-500 mt-1">Humidity</p>
         </div>
       </div>
