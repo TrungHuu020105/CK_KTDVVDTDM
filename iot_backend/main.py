@@ -23,7 +23,8 @@ from iot_backend.api.routes_websocket import manager, save_iot_metric_to_db
 from iot_backend import mqtt_service
 from iot_backend.database import SessionLocal
 from iot_backend.state import runtime_state
-from iot_backend.services.sensor_reading_service import create_sensor_reading, serialize_reading
+from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
+from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
 
 
 MAIN_LOOP = None
@@ -125,6 +126,7 @@ def handle_mqtt_reading(reading: dict):
         else:
             db = SessionLocal()
             try:
+                metric_ts = parse_event_ts(reading.get("timestamp") or now_iso)
                 row = create_sensor_reading(
                     db,
                     sensor_id=str(sensor_id),
@@ -141,6 +143,24 @@ def handle_mqtt_reading(reading: dict):
                     latitude=reading.get("latitude"),
                     longitude=reading.get("longitude"),
                 )
+                if temp is not None:
+                    check_and_trigger_metric_alert(
+                        db,
+                        metric_type="temperature",
+                        source=str(sensor_id),
+                        value=float(temp),
+                        metric_ts=metric_ts,
+                        origin="mqtt sensor_reading",
+                    )
+                if humidity is not None:
+                    check_and_trigger_metric_alert(
+                        db,
+                        metric_type="humidity",
+                        source=str(sensor_id),
+                        value=float(humidity),
+                        metric_ts=metric_ts,
+                        origin="mqtt sensor_reading",
+                    )
                 db.commit()
                 reading["sensor_reading"] = serialize_reading(row)
             finally:

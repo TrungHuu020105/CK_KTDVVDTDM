@@ -22,6 +22,9 @@ class SensorCreateRequest(BaseModel):
     location_query: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    task_description: str | None = None
+    priority_level: str | None = None
+    action_hint: str | None = None
     alert_enabled: bool = False
     temperature_min_threshold: float | None = None
     temperature_max_threshold: float | None = None
@@ -38,6 +41,9 @@ class SensorUpdateRequest(BaseModel):
     location_query: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    task_description: str | None = None
+    priority_level: str | None = None
+    action_hint: str | None = None
     is_active: bool | None = None
     alert_enabled: bool | None = None
     temperature_min_threshold: float | None = None

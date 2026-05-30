@@ -14,6 +14,7 @@ from iot_backend.api.routes_auth import get_current_user
 from iot_backend.database import get_db
 from iot_backend.models import IoTDevice, SensorReading, User
 from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
+from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
 from iot_backend.services.weather_service import geocode_location, get_virtual_weather_readings
 
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
@@ -46,6 +47,9 @@ def _serialize_device(device: IoTDevice, latest: SensorReading | None = None) ->
         "latitude": device.latitude,
         "longitude": device.longitude,
         "timezone_name": device.timezone_name,
+        "task_description": device.task_description,
+        "priority_level": device.priority_level,
+        "action_hint": device.action_hint,
         "is_active": device.is_active,
         "alert_enabled": device.alert_enabled,
         "temperature_min_threshold": device.temperature_min_threshold,
@@ -76,6 +80,9 @@ class SensorCreateRequest(BaseModel):
     location_query: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    task_description: Optional[str] = None
+    priority_level: Optional[str] = None
+    action_hint: Optional[str] = None
     alert_enabled: bool = False
     temperature_min_threshold: Optional[float] = None
     temperature_max_threshold: Optional[float] = None
@@ -95,6 +102,9 @@ class SensorUpdateRequest(BaseModel):
     location_query: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    task_description: Optional[str] = None
+    priority_level: Optional[str] = None
+    action_hint: Optional[str] = None
     is_active: Optional[bool] = None
     alert_enabled: Optional[bool] = None
     temperature_min_threshold: Optional[float] = None
@@ -187,8 +197,13 @@ def create_sensor(payload: SensorCreateRequest, user: User = Depends(get_current
         latitude=latitude,
         longitude=longitude,
         timezone_name=timezone_name,
+        task_description=(payload.task_description or "").strip() or None,
+        priority_level=(payload.priority_level or "").strip().lower() or None,
+        action_hint=(payload.action_hint or "").strip() or None,
         is_active=True,
         alert_enabled=payload.alert_enabled,
+        min_threshold=payload.temperature_min_threshold,
+        max_threshold=payload.temperature_max_threshold,
         temperature_min_threshold=payload.temperature_min_threshold,
         temperature_max_threshold=payload.temperature_max_threshold,
         humidity_min_threshold=payload.humidity_min_threshold,
@@ -216,6 +231,12 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
         raise HTTPException(status_code=404, detail="Sensor not found")
     for field in payload.model_fields_set:
         setattr(device, field, getattr(payload, field))
+    if "temperature_min_threshold" in payload.model_fields_set or "temperature_max_threshold" in payload.model_fields_set:
+        device.min_threshold = device.temperature_min_threshold
+        device.max_threshold = device.temperature_max_threshold
+    elif "humidity_min_threshold" in payload.model_fields_set or "humidity_max_threshold" in payload.model_fields_set:
+        device.min_threshold = device.humidity_min_threshold
+        device.max_threshold = device.humidity_max_threshold
     if device.source_type == "virtual_meteostat" and device.environment_type != "outdoor":
         raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
     db.commit()
@@ -252,6 +273,25 @@ def ingest_reading(payload: SensorReadingRequest, user: User = Depends(get_curre
         latitude=payload.latitude,
         longitude=payload.longitude,
     )
+    metric_ts = parse_event_ts(payload.timestamp)
+    if payload.temperature is not None:
+        check_and_trigger_metric_alert(
+            db,
+            metric_type="temperature",
+            source=payload.sensor_id,
+            value=float(payload.temperature),
+            metric_ts=metric_ts,
+            origin="api/sensors/readings",
+        )
+    if payload.humidity is not None:
+        check_and_trigger_metric_alert(
+            db,
+            metric_type="humidity",
+            source=payload.sensor_id,
+            value=float(payload.humidity),
+            metric_ts=metric_ts,
+            origin="api/sensors/readings",
+        )
     db.commit()
     db.refresh(row)
     return serialize_reading(row)

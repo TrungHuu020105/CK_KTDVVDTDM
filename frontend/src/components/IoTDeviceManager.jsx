@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Bot,
-  Cloud,
   Droplets,
   Edit3,
   Fan,
   Home,
   Mail,
   Plus,
-  RefreshCcw,
   Send,
   Settings,
   Thermometer,
@@ -21,12 +19,36 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { useDevices } from '../context/DeviceContext'
 import { useAuth } from '../context/AuthContext'
 import AddDeviceModal from './AddDeviceModal'
+import SensorAlertThresholdModal from './SensorAlertThresholdModal'
+import SensorEditModal from './SensorEditModal'
+import SensorWifiModal from './SensorWifiModal'
+import SensorAiContextModal from './SensorAiContextModal'
 import api from '../api'
 import { formatVNTime } from '../utils/vnTime'
 
 const getSensorId = (sensor) => sensor?.sensor_id || sensor?.source
 const fmt = (value, suffix = '') => value === null || value === undefined ? '--' : `${Number(value).toFixed(1)}${suffix}`
 const onlyTime = (value) => value ? formatVNTime(value).split(' ').pop() : '--'
+const toNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function isOutOfRange(value, minValue, maxValue) {
+  const current = toNumberOrNull(value)
+  const min = toNumberOrNull(minValue)
+  const max = toNumberOrNull(maxValue)
+  if (current === null || min === null || max === null) return false
+  return current < min || current > max
+}
+
+function formatThreshold(minValue, maxValue, unit) {
+  const min = toNumberOrNull(minValue)
+  const max = toNumberOrNull(maxValue)
+  if (min === null || max === null) return null
+  return `${min.toFixed(1)} - ${max.toFixed(1)}${unit}`
+}
 
 function numericValues(rows, key) {
   return rows.map((row) => Number(row[key])).filter((value) => Number.isFinite(value))
@@ -54,6 +76,11 @@ export default function IoTDeviceManager() {
   const [deviceStates, setDeviceStates] = useState({})
   const [toast, setToast] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [alertSensor, setAlertSensor] = useState(null)
+  const [editSensor, setEditSensor] = useState(null)
+  const [wifiSensor, setWifiSensor] = useState(null)
+  const [aiSensor, setAiSensor] = useState(null)
+  const [modalSaving, setModalSaving] = useState(false)
   const wsRef = useRef(null)
 
   const selectedSensorId = getSensorId(selectedSensor)
@@ -176,19 +203,87 @@ export default function IoTDeviceManager() {
     }
   }
 
-  const setPhysicalDeviceState = (sensor, key, value) => {
+  const applySensorPatch = async (sensor, payload, successMessage = 'Saved') => {
     const sensorId = getSensorId(sensor)
-    if (sensor.source_type === 'virtual_meteostat') {
-      showToast('Thiết bị này hiện là Virtual IoT nên không thể điều khiển phần cứng thật.', 'warning')
-      return
+    const res = await api.patch(`/api/sensors/${sensorId}`, payload)
+    showToast(successMessage)
+    await fetchSensors()
+    if (selectedSensorId === sensorId) {
+      setSelectedSensor(res.data)
+      await loadDetails(res.data, true)
     }
-    setDeviceStates((prev) => ({
-      ...prev,
-      [sensorId]: { ...(prev[sensorId] || {}), [key]: value },
-    }))
-    showToast(`${value ? 'Bật' : 'Tắt'} ${key === 'fan' ? 'quạt' : 'phun sương'} cho ${sensor.name}.`)
+    return res.data
   }
 
+  const openSettingModal = (kind, sensor) => {
+    setOpenSettingId(null)
+    if (kind === 'alerts') setAlertSensor(sensor)
+    if (kind === 'edit') setEditSensor(sensor)
+    if (kind === 'wifi') setWifiSensor(sensor)
+    if (kind === 'ai') setAiSensor(sensor)
+  }
+
+  const handleSaveAlertThresholds = async (payload) => {
+    if (!alertSensor) return
+    setModalSaving(true)
+    try {
+      await applySensorPatch(alertSensor, payload, 'Đã lưu ngưỡng cảnh báo')
+      setAlertSensor(null)
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Không lưu được ngưỡng cảnh báo', 'error')
+      throw err
+    } finally {
+      setModalSaving(false)
+    }
+  }
+
+  const handleSaveDeviceEdit = async (payload) => {
+    if (!editSensor) return
+    setModalSaving(true)
+    try {
+      await applySensorPatch(editSensor, payload, 'Device updated')
+      setEditSensor(null)
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Could not update device', 'error')
+      throw err
+    } finally {
+      setModalSaving(false)
+    }
+  }
+
+  const handleSaveAiContext = async (payload) => {
+    if (!aiSensor) return
+    setModalSaving(true)
+    try {
+      await applySensorPatch(aiSensor, payload, 'Saved AI context')
+      setAiSensor(null)
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Could not save AI context', 'error')
+      throw err
+    } finally {
+      setModalSaving(false)
+    }
+  }
+
+  const setPhysicalDeviceState = async (sensor, key, value) => {
+    const sensorId = getSensorId(sensor)
+    if (sensor.source_type === 'virtual_meteostat') {
+      showToast('Virtual sensor cannot receive hardware commands.', 'warning')
+      return
+    }
+
+    const payload = key === 'mist' ? { fog: Boolean(value) } : { [key]: Boolean(value) }
+    try {
+      await api.post(`/api/devices/${sensorId}/manual-command`, payload)
+      setDeviceStates((prev) => ({
+        ...prev,
+        [sensorId]: { ...(prev[sensorId] || {}), [key]: value },
+      }))
+      showToast(`${value ? 'Bật' : 'Tắt'} ${key === 'fan' ? 'quạt' : 'phun sương'} cho ${sensor.name}.`)
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Could not send manual command', 'error')
+    }
+  }
   const chartData = useMemo(() => {
     const actual = (history || []).map((row) => ({
       time: onlyTime(row.timestamp || row.event_ts),
@@ -245,8 +340,18 @@ export default function IoTDeviceManager() {
             const latest = latestMap[sensorId] || sensor.latest_reading || {}
             const isVirtual = sensor.source_type === 'virtual_meteostat'
             const state = deviceStates[sensorId] || {}
+            const tempThreshold = formatThreshold(sensor.temperature_min_threshold, sensor.temperature_max_threshold, '°C')
+            const humidityThreshold = formatThreshold(sensor.humidity_min_threshold, sensor.humidity_max_threshold, '%')
+            const hasThresholds = Boolean(tempThreshold || humidityThreshold)
+            const tempOutOfRange = isOutOfRange(latest.temperature, sensor.temperature_min_threshold, sensor.temperature_max_threshold)
+            const humidityOutOfRange = isOutOfRange(latest.humidity, sensor.humidity_min_threshold, sensor.humidity_max_threshold)
+            const hasAlertViolation = Boolean(sensor.alert_enabled) && (tempOutOfRange || humidityOutOfRange)
             return (
-              <div key={sensorId} className="relative bg-dark-800 rounded-xl p-5 border border-gray-800 hover:border-neon-cyan/40 transition-all">
+              <div key={sensorId} className={`relative rounded-xl border p-5 transition-all ${
+                hasAlertViolation
+                  ? 'bg-red-950/20 border-red-400/70 shadow-[0_0_0_1px_rgba(248,113,113,0.4)]'
+                  : 'bg-dark-800 border-gray-800 hover:border-neon-cyan/40'
+              }`}>
                 <button type="button" onClick={() => openDetails(sensor)} className="block w-full text-left">
                   <div className="flex items-start justify-between gap-3 mb-4">
                     <div>
@@ -270,6 +375,20 @@ export default function IoTDeviceManager() {
                     </span>
                   </div>
 
+                  {Boolean(sensor.alert_enabled) && hasThresholds && (
+                    <div className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+                      hasAlertViolation
+                        ? 'border-red-400/50 bg-red-500/10 text-red-200'
+                        : 'border-cyan-400/30 bg-cyan-500/10 text-cyan-100'
+                    }`}>
+                      <p className="font-semibold">{hasAlertViolation ? 'Đang vượt ngưỡng cảnh báo' : 'Ngưỡng cảnh báo đang bật'}</p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {tempThreshold && <span className="rounded bg-black/25 px-2 py-1">Nhiệt độ: {tempThreshold}</span>}
+                        {humidityThreshold && <span className="rounded bg-black/25 px-2 py-1">Độ ẩm: {humidityThreshold}</span>}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="rounded-lg border border-neon-cyan/20 bg-dark-900 p-4 mb-4">
                     <p className="text-gray-400 text-sm mb-3">Real-time Value</p>
                     <div className="grid grid-cols-2 gap-4">
@@ -292,9 +411,9 @@ export default function IoTDeviceManager() {
                   </div>
                 </button>
 
-                <div className="flex items-center gap-2 text-neon-green mb-4">
-                  <span className="w-3 h-3 rounded-full bg-neon-green animate-pulse" />
-                  <span>Active</span>
+                <div className={`mb-4 flex items-center gap-2 ${hasAlertViolation ? 'text-red-300' : 'text-neon-green'}`}>
+                  <span className={`w-3 h-3 rounded-full animate-pulse ${hasAlertViolation ? 'bg-red-400' : 'bg-neon-green'}`} />
+                  <span>{hasAlertViolation ? 'Alert' : 'Active'}</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -313,7 +432,10 @@ export default function IoTDeviceManager() {
                     sensor={sensor}
                     state={state}
                     onVirtualSync={() => syncVirtualSensor(sensor)}
-                    onMessage={showToast}
+                    onOpenAlerts={() => openSettingModal('alerts', sensor)}
+                    onOpenEdit={() => openSettingModal('edit', sensor)}
+                    onOpenWifi={() => openSettingModal('wifi', sensor)}
+                    onOpenAiContext={() => openSettingModal('ai', sensor)}
                     onToggleFan={(value) => setPhysicalDeviceState(sensor, 'fan', value)}
                     onToggleMist={(value) => setPhysicalDeviceState(sensor, 'mist', value)}
                   />
@@ -338,26 +460,63 @@ export default function IoTDeviceManager() {
 
       {showGlobalSetting && <NotificationSettingsModal onClose={() => setShowGlobalSetting(false)} onMessage={showToast} />}
       <AddDeviceModal isOpen={showAddModal} onClose={() => setShowAddModal(false)} onAdd={handleAdd} isLoading={adding} />
+      <SensorAlertThresholdModal
+        isOpen={Boolean(alertSensor)}
+        sensor={alertSensor}
+        isLoading={modalSaving}
+        onClose={() => setAlertSensor(null)}
+        onSave={handleSaveAlertThresholds}
+      />
+      <SensorEditModal
+        isOpen={Boolean(editSensor)}
+        sensor={editSensor}
+        isLoading={modalSaving}
+        onClose={() => setEditSensor(null)}
+        onSave={handleSaveDeviceEdit}
+      />
+      <SensorWifiModal
+        isOpen={Boolean(wifiSensor)}
+        sensor={wifiSensor}
+        onClose={() => setWifiSensor(null)}
+        onMessage={showToast}
+      />
+      <SensorAiContextModal
+        isOpen={Boolean(aiSensor)}
+        sensor={aiSensor}
+        isLoading={modalSaving}
+        onClose={() => setAiSensor(null)}
+        onSave={handleSaveAiContext}
+        onMessage={showToast}
+      />
     </div>
   )
 }
 
-function SensorSettingMenu({ sensor, state, onVirtualSync, onMessage, onToggleFan, onToggleMist }) {
+function SensorSettingMenu({
+  sensor,
+  state,
+  onVirtualSync,
+  onOpenAlerts,
+  onOpenEdit,
+  onOpenWifi,
+  onOpenAiContext,
+  onToggleFan,
+  onToggleMist,
+}) {
   const isVirtual = sensor.source_type === 'virtual_meteostat'
-  const virtualMessage = () => onMessage('Thiết bị này hiện là Virtual IoT. Các thao tác phần cứng chỉ được mô phỏng.', 'warning')
   return (
     <div className="absolute left-6 right-6 top-[calc(100%-5.5rem)] z-20 rounded-xl border border-neon-cyan/30 bg-dark-900 p-5 shadow-2xl">
       <div className="space-y-4 text-lg">
-        <button onClick={isVirtual ? virtualMessage : () => onMessage('Mở cấu hình Alerts cho thiết bị.')} className="flex items-center gap-3 text-yellow-300 hover:text-yellow-200">
+        <button onClick={onOpenAlerts} className="flex items-center gap-3 text-yellow-300 hover:text-yellow-200">
           <AlertCircle className="w-5 h-5" /> Alerts
         </button>
-        <button onClick={isVirtual ? virtualMessage : () => onMessage('Mở form Edit thiết bị.')} className="flex items-center gap-3 text-blue-200 hover:text-blue-100">
+        <button onClick={onOpenEdit} className="flex items-center gap-3 text-blue-200 hover:text-blue-100">
           <Edit3 className="w-5 h-5" /> Edit
         </button>
-        <button onClick={isVirtual ? virtualMessage : () => onMessage('Mở cấu hình WiFi cho ESP32.')} className="flex items-center gap-3 text-sky-300 hover:text-sky-200">
+        <button onClick={onOpenWifi} className="flex items-center gap-3 text-sky-300 hover:text-sky-200">
           <Wifi className="w-5 h-5" /> WiFi
         </button>
-        <button onClick={() => onMessage('AI Context dùng để giải thích trạng thái sensor khi báo cáo.')} className="flex items-center gap-3 text-neon-cyan hover:text-cyan-200">
+        <button onClick={onOpenAiContext} className="flex items-center gap-3 text-neon-cyan hover:text-cyan-200">
           <Bot className="w-5 h-5" /> AI Context
         </button>
       </div>
@@ -680,3 +839,4 @@ function TargetList({ targets, busyId, onToggle, onDelete, onTest, hideTest = fa
     </div>
   )
 }
+

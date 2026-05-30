@@ -1,7 +1,5 @@
 """
-Live IoT Data MQTT Publisher for:
-- sensor_6 -> temperature only
-- sensor_9 -> humidity only
+Live IoT Data MQTT Publisher for sensor-level realtime readings.
 
 This file follows the same idea as the old streaming flow:
 - generate data every interval for smooth realtime MQTT updates
@@ -10,11 +8,11 @@ This file follows the same idea as the old streaming flow:
 - use Vietnam time for timestamps and logs
 
 Usage:
-    python3 stream_iot_data_sensor_6_9.py
-    python3 stream_iot_data_sensor_6_9.py --broker 20.214.247.102 --port 1883
-    python3 stream_iot_data_sensor_6_9.py --interval 5
-    python3 stream_iot_data_sensor_6_9.py --topic-template sensors/{source}/data
-    python3 stream_iot_data_sensor_6_9.py --topic sensors/sensor_6/data
+    python stream_data.py
+    python stream_data.py --broker 20.214.247.102 --port 1883
+    python stream_data.py --interval 3
+    python stream_data.py --topic-template sensors/{source}/data
+    python stream_data.py --topic sensors/sensor_4/data
 """
 
 from __future__ import annotations
@@ -88,6 +86,8 @@ FAKE_ALWAYS_SAVE = _env_bool("FAKE_ALWAYS_SAVE", False)
 FAKE_SAVE_INTERVAL_SECONDS = _env_int("FAKE_SAVE_INTERVAL_SECONDS", 30)
 FAKE_TEMP_DELTA_THRESHOLD = _env_float("FAKE_TEMP_DELTA_THRESHOLD", 0.3)
 FAKE_HUMIDITY_DELTA_THRESHOLD = _env_float("FAKE_HUMIDITY_DELTA_THRESHOLD", 1.5)
+STREAM_SOURCE_1 = "sensor_4"
+STREAM_SOURCE_2 = "sensor_5"
 
 
 def _now_vn() -> datetime:
@@ -125,7 +125,7 @@ class SensorConfig:
 SENSORS = [
     SensorConfig(
         metric_type="temperature",
-        source="sensor_6",
+        source=STREAM_SOURCE_1,
         min_value=_env_float("SENSOR_6_TEMP_MIN", 28.0),
         max_value=_env_float("SENSOR_6_TEMP_MAX", 35.0),
         step_size=_env_float("SENSOR_6_TEMP_STEP", 0.45),
@@ -138,7 +138,33 @@ SENSORS = [
     ),
     SensorConfig(
         metric_type="humidity",
-        source="sensor_9",
+        source=STREAM_SOURCE_1,
+        min_value=_env_float("SENSOR_6_HUMIDITY_MIN", 56.0),
+        max_value=_env_float("SENSOR_6_HUMIDITY_MAX", 82.0),
+        step_size=_env_float("SENSOR_6_HUMIDITY_STEP", 1.1),
+        save_threshold=FAKE_HUMIDITY_DELTA_THRESHOLD,
+        max_save_interval=FAKE_SAVE_INTERVAL_SECONDS,
+        unit="%",
+        trend_enabled=True,
+        trend_amplitude=0.35,
+        trend_peak_hour=4.0,
+    ),
+    SensorConfig(
+        metric_type="temperature",
+        source=STREAM_SOURCE_2,
+        min_value=_env_float("SENSOR_9_TEMP_MIN", 26.0),
+        max_value=_env_float("SENSOR_9_TEMP_MAX", 33.0),
+        step_size=_env_float("SENSOR_9_TEMP_STEP", 0.4),
+        save_threshold=FAKE_TEMP_DELTA_THRESHOLD,
+        max_save_interval=FAKE_SAVE_INTERVAL_SECONDS,
+        unit="degC",
+        trend_enabled=True,
+        trend_amplitude=0.13,
+        trend_peak_hour=13.5,
+    ),
+    SensorConfig(
+        metric_type="humidity",
+        source=STREAM_SOURCE_2,
         min_value=_env_float("SENSOR_9_HUMIDITY_MIN", 50.0),
         max_value=_env_float("SENSOR_9_HUMIDITY_MAX", 85.0),
         step_size=_env_float("SENSOR_9_HUMIDITY_STEP", 1.30),
@@ -273,7 +299,8 @@ class Sensor69DataGenerator:
             self.state_manager.initialize(config, initial_value)
 
         self.initialized = True
-        print(f"[INFO] Initialized {len(self.active_sensors)} fake sensors: sensor_6, sensor_9")
+        sources = sorted({cfg.source for cfg in self.active_sensors})
+        print(f"[INFO] Initialized {len(self.active_sensors)} metric streams across sources: {', '.join(sources)}")
 
     def run_once(self) -> Dict[str, object]:
         if not self.initialized:
@@ -281,8 +308,10 @@ class Sensor69DataGenerator:
 
         now = _now_vn()
         timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        timestamp_iso = now.isoformat()
 
         metrics_to_publish: List[Dict[str, object]] = []
+        sensor_readings: Dict[str, Dict[str, object]] = {}
         saved_count = 0
 
         for config in self.active_sensors:
@@ -312,9 +341,35 @@ class Sensor69DataGenerator:
                 }
             )
 
+            reading = sensor_readings.setdefault(
+                config.source,
+                {
+                    "source": config.source,
+                    "timestamp": timestamp_str,
+                    "timestamp_iso": timestamp_iso,
+                    "temperature": None,
+                    "humidity": None,
+                    "saved": False,
+                    "reasons": [],
+                },
+            )
+            reading[config.metric_type] = round(value, 2)
+            reading["saved"] = bool(reading["saved"]) or bool(save_flag)
+            reading["reasons"].append(f"{config.metric_type}:{reason}")
+
+        ready_readings = []
+        for source, row in sensor_readings.items():
+            if row["temperature"] is None or row["humidity"] is None:
+                # Backend sensor_reading ingest requires both fields.
+                continue
+            row["reason"] = " | ".join(row["reasons"])
+            ready_readings.append(row)
+
         return {
             "metrics": metrics_to_publish,
+            "readings": ready_readings,
             "timestamp": timestamp_str,
+            "timestamp_iso": timestamp_iso,
             "generated": len(metrics_to_publish),
             "saved": saved_count,
             "dropped": len(metrics_to_publish) - saved_count,
@@ -366,7 +421,12 @@ class LiveSensor69MqttPublisher:
 
     def connect(self) -> None:
         print(f"[MQTT] Connecting to {self.broker}:{self.port} ...")
-        self.client.connect(self.broker, self.port, 60)
+        try:
+            self.client.connect(self.broker, self.port, 60)
+        except Exception as exc:
+            print(f"[MQTT] Initial connect failed: {type(exc).__name__}: {exc}")
+            self.connected = False
+            return
         self.client.loop_start()
         for _ in range(10):
             if self.connected:
@@ -405,24 +465,28 @@ class LiveSensor69MqttPublisher:
 
         self.batch_count += 1
         metrics_to_send = self.generator.run_once()
+        readings = metrics_to_send.get("readings", [])
         metrics = metrics_to_send.get("metrics", [])
-        if not metrics:
+        if not readings:
             print("[INFO] No metrics generated in this batch")
             return
 
-        self.total_records += len(metrics)
+        self.total_records += len(readings)
         timestamp = str(metrics_to_send.get("timestamp", _now_vn().strftime("%Y-%m-%d %H:%M:%S")))
-        db_worthy = len([m for m in metrics if m.get("saved", True)])
-        realtime_only = len(metrics) - db_worthy
+        db_worthy = len([r for r in readings if r.get("saved", True)])
+        realtime_only = len(readings) - db_worthy
 
-        for metric in metrics:
+        for reading in readings:
             payload = {
-                "timestamp": metric.get("timestamp", timestamp),
-                "metric_type": metric.get("metric_type"),
-                "value": metric.get("value"),
-                "source": metric.get("source"),
-                "unit": metric.get("unit", ""),
-                "saved": metric.get("saved", False),
+                "timestamp": reading.get("timestamp_iso") or reading.get("timestamp", timestamp),
+                "source": reading.get("source"),
+                "sensor_id": reading.get("source"),
+                "temperature": reading.get("temperature"),
+                "humidity": reading.get("humidity"),
+                "source_type": "physical_iot",
+                "provider": "stream_data_fake",
+                "environment_type": "indoor",
+                "saved": reading.get("saved", True),
             }
 
             topic = self._resolve_topic(str(payload["source"]))
@@ -431,27 +495,28 @@ class LiveSensor69MqttPublisher:
                 print(f"[MQTT] Publish failed topic={topic} rc={result.rc}")
 
         print(
-            f"[{timestamp}] Batch #{self.batch_count} | Published: {len(metrics)} | "
+            f"[{timestamp}] Batch #{self.batch_count} | Published: {len(readings)} sensor_readings | "
             f"DB-Worthy: {db_worthy} | Realtime-Only: {realtime_only} | TZ: {DEFAULT_TIMEZONE}"
         )
 
-        for metric in metrics:
-            topic = self._resolve_topic(str(metric.get("source")))
-            reason = metric.get("reason", "published")
+        for reading in readings:
+            topic = self._resolve_topic(str(reading.get("source")))
+            reason = reading.get("reason", "published")
             print(
-                f"  MQTT {str(metric['metric_type']):20} = {float(metric['value']):8.2f} "
-                f"{str(metric['unit']):5} | topic={topic} | saved={metric['saved']} | {reason}"
+                f"  MQTT source={reading['source']} | temp={float(reading['temperature']):6.2f} C | "
+                f"humidity={float(reading['humidity']):6.2f} % | topic={topic} | saved={reading['saved']} | {reason}"
             )
         print()
 
     def run_continuous(self) -> None:
         print("=" * 100)
-        print("LIVE IoT DATA MQTT PUBLISHER - SENSOR_6/SENSOR_9")
+        print("LIVE IoT DATA MQTT PUBLISHER - SENSOR READINGS")
         print("=" * 100)
         print(f"Broker: {self.broker}:{self.port}")
         print(f"Interval: {self.interval}s per batch")
         print(f"Topic template: {self.topic_template}")
-        print("Fake sources: sensor_6 (temperature), sensor_9 (humidity)")
+        sources = sorted({cfg.source for cfg in self.generator.active_sensors or SENSORS})
+        print(f"Fake sources: {', '.join(sources)} (each source emits temperature + humidity)")
         print(f"Timezone: {DEFAULT_TIMEZONE}")
         if self.fixed_topic:
             print(f"Fixed topic override: {self.fixed_topic}")
@@ -461,6 +526,9 @@ class LiveSensor69MqttPublisher:
 
         try:
             while True:
+                if not self.connected:
+                    print("[MQTT] Not connected. Retrying ...")
+                    self._ensure_connected()
                 self.publish_batch()
                 time.sleep(self.interval)
         except KeyboardInterrupt:
@@ -479,7 +547,7 @@ class LiveSensor69MqttPublisher:
 def main() -> None:
     _load_env_files()
 
-    parser = argparse.ArgumentParser(description="Publish live IoT sensor data to MQTT for sensor_6 and sensor_9")
+    parser = argparse.ArgumentParser(description="Publish live IoT sensor readings (temperature + humidity) to MQTT")
     parser.add_argument("--broker", type=str, default=os.getenv("MQTT_HOST", "127.0.0.1"), help="MQTT broker host")
     parser.add_argument("--port", type=int, default=_env_int("MQTT_PORT", 1883), help="MQTT broker port")
     parser.add_argument(
@@ -498,7 +566,7 @@ def main() -> None:
         "--topic",
         type=str,
         default="",
-        help="Fixed topic override for all metrics (e.g., sensors/sensor-06/data)",
+        help="Fixed topic override for all metrics (e.g., sensors/sensor_4/data)",
     )
     parser.add_argument("--username", type=str, default=os.getenv("MQTT_USERNAME", ""), help="MQTT username")
     parser.add_argument("--password", type=str, default=os.getenv("MQTT_PASSWORD", ""), help="MQTT password")
