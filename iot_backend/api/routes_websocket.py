@@ -13,6 +13,7 @@ from iot_backend.crud import create_metrics_bulk, get_user_accessible_sources, g
 from iot_backend.database import SessionLocal
 from iot_backend.schemas import MetricCreate
 from iot_backend.schemas_ws import IotMetricsData, MetricsData, StatusResponse
+from iot_backend.services.kafka_event_service import publish_metric_event, publish_sensor_reading_event
 from iot_backend.services.sensor_reading_service import create_sensor_reading
 from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
 from iot_backend.websocket_manager import ConnectionManager
@@ -118,6 +119,14 @@ def save_iot_metric_to_db(
             unit=unit,
         )
         create_metrics_bulk(db, [metric])
+        publish_metric_event(
+            sensor_id=source,
+            metric_type=metric_type,
+            metric_value=float(value),
+            unit=unit,
+            event_ts=str(timestamp or metric_ts.isoformat()),
+            ingest_source="websocket",
+        )
     except Exception as e:
         print(f"DB save error: {e}")
     finally:
@@ -186,6 +195,20 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         db.commit()
                     finally:
                         db.close()
+
+                    publish_sensor_reading_event(
+                        sensor_id=normalized_source,
+                        event_ts=str(metrics_dict.get("timestamp") or datetime.now().isoformat()),
+                        temperature=float(metrics_dict.get("temperature")) if metrics_dict.get("temperature") is not None else None,
+                        humidity=float(metrics_dict.get("humidity")) if metrics_dict.get("humidity") is not None else None,
+                        source_type=str(metrics_dict.get("source_type") or "physical_iot"),
+                        provider=str(metrics_dict.get("provider") or "websocket"),
+                        environment_type=metrics_dict.get("environment_type"),
+                        location=metrics_dict.get("location"),
+                        latitude=metrics_dict.get("latitude"),
+                        longitude=metrics_dict.get("longitude"),
+                        ingest_source="websocket",
+                    )
 
                     realtime_broadcast = {
                         "type": "sensor_reading",

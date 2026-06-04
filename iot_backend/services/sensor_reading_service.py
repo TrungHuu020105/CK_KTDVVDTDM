@@ -7,6 +7,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from iot_backend import config
 from iot_backend.models import IoTDevice, Metric, SensorReading
 from iot_backend.services.databricks_service import write_bronze_sensor_reading
 
@@ -127,7 +128,7 @@ def create_sensor_reading(
             unit=row.humidity_unit,
         ))
 
-    if write_databricks:
+    if write_databricks and config.DATABRICKS_DIRECT_WRITE_ENABLED:
         ok, status = write_bronze_sensor_reading({
             "sensor_id": row.sensor_id,
             "event_ts": row.event_ts,
@@ -144,5 +145,9 @@ def create_sensor_reading(
             "longitude": row.longitude,
         })
         row.databricks_status = "written" if ok else f"skipped:{status}"[:30]
+    elif write_databricks:
+        row.databricks_status = "skipped:direct_off"
+    else:
+        row.databricks_status = "skipped:caller_off"
 
     return row

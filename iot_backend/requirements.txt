@@ -14,3 +14,4 @@ websocket-client==1.8.0
 psutil==5.9.6
 databricks-sql-connector==3.7.0
 meteostat==1.6.8
+kafka-python==2.0.2

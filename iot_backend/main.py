@@ -23,6 +23,7 @@ from iot_backend.api.routes_websocket import manager, save_iot_metric_to_db
 from iot_backend import mqtt_service
 from iot_backend.database import SessionLocal
 from iot_backend.state import runtime_state
+from iot_backend.services.kafka_event_service import close_producer, publish_metric_event, publish_sensor_reading_event
 from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
 from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
 
@@ -98,6 +99,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     mqtt_service.stop_mqtt()
+    close_producer()
     engine.dispose()
 
 
@@ -114,14 +116,23 @@ def handle_mqtt_reading(reading: dict):
 
     try:
         if metric_type is not None and metric_value is not None:
+            event_ts = reading.get("timestamp") or now_iso
             save_iot_metric_to_db(
                 metric_type=str(metric_type),
                 source=str(sensor_id),
                 location=location,
-                timestamp=reading.get("timestamp") or now_iso,
+                timestamp=event_ts,
                 value=float(metric_value),
                 unit=str(reading.get("unit") or ""),
                 save_flag=bool(reading.get("saved", True)),
+            )
+            publish_metric_event(
+                sensor_id=str(sensor_id),
+                metric_type=str(metric_type),
+                metric_value=float(metric_value),
+                unit=str(reading.get("unit") or ""),
+                event_ts=str(event_ts),
+                ingest_source="mqtt",
             )
         else:
             db = SessionLocal()
@@ -165,6 +176,19 @@ def handle_mqtt_reading(reading: dict):
                 reading["sensor_reading"] = serialize_reading(row)
             finally:
                 db.close()
+            publish_sensor_reading_event(
+                sensor_id=str(sensor_id),
+                event_ts=str(reading.get("timestamp") or now_iso),
+                temperature=float(temp) if temp is not None else None,
+                humidity=float(humidity) if humidity is not None else None,
+                source_type=str(reading.get("source_type") or "physical_iot"),
+                provider=str(reading.get("provider") or "esp32"),
+                environment_type=reading.get("environment_type"),
+                location=location,
+                latitude=reading.get("latitude"),
+                longitude=reading.get("longitude"),
+                ingest_source="mqtt",
+            )
             if temp is not None and humidity is not None:
                 runtime_state.apply_auto(float(temp), float(humidity))
     except Exception as exc:
