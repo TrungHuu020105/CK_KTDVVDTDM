@@ -29,6 +29,8 @@ import { formatVNTime } from '../utils/vnTime'
 const getSensorId = (sensor) => sensor?.sensor_id || sensor?.source
 const fmt = (value, suffix = '') => value === null || value === undefined ? '--' : `${Number(value).toFixed(1)}${suffix}`
 const onlyTime = (value) => value ? formatVNTime(value).split(' ').pop() : '--'
+const LATEST_REFRESH_MS = 3000
+const HISTORY_REFRESH_MS = 15000
 const toNumberOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
@@ -75,7 +77,7 @@ function minuteLabel(value) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function toMinuteChartData(historyRows, forecastRows) {
+function toMinuteChartData(historyRows) {
   const map = new Map()
 
   for (const row of historyRows || []) {
@@ -87,28 +89,9 @@ function toMinuteChartData(historyRows, forecastRows) {
       time: minuteLabel(key),
       temperature: null,
       humidity: null,
-      forecast_temperature: null,
-      forecast_humidity: null,
     }
     current.temperature = row.temperature ?? current.temperature
     current.humidity = row.humidity ?? current.humidity
-    map.set(key, current)
-  }
-
-  for (const row of (forecastRows || []).slice(0, 12)) {
-    const rawTs = row.forecast_ts || row.timestamp || row.event_ts
-    const key = minuteKey(rawTs)
-    if (!key) continue
-    const current = map.get(key) || {
-      timestamp: key,
-      time: minuteLabel(key),
-      temperature: null,
-      humidity: null,
-      forecast_temperature: null,
-      forecast_humidity: null,
-    }
-    current.forecast_temperature = row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : current.forecast_temperature)
-    current.forecast_humidity = row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : current.forecast_humidity)
     map.set(key, current)
   }
 
@@ -124,7 +107,6 @@ export default function IoTDeviceManager() {
   const [latestMap, setLatestMap] = useState({})
   const [selectedSensor, setSelectedSensor] = useState(null)
   const [history, setHistory] = useState([])
-  const [forecast, setForecast] = useState([])
   const [openSettingId, setOpenSettingId] = useState(null)
   const [deviceStates, setDeviceStates] = useState({})
   const [toast, setToast] = useState(null)
@@ -157,20 +139,21 @@ export default function IoTDeviceManager() {
     setLatestMap((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))
   }
 
-  const loadDetails = async (sensor, silent = false) => {
+  const loadHistory = async (sensor, silent = true) => {
     if (!sensor) return
     if (!silent) setDetailLoading(true)
     const sensorId = getSensorId(sensor)
     try {
-      const [historyRes, forecastRes] = await Promise.all([
-        api.get(`/api/sensors/${sensorId}/history`, { params: { minutes: 120 } }).catch(() => ({ data: { readings: [] } })),
-        api.get(`/api/sensors/${sensorId}/forecast`).catch(() => ({ data: { forecasts: [] } })),
-      ])
+      const historyRes = await api.get(`/api/sensors/${sensorId}/history`, { params: { minutes: 120 } }).catch(() => ({ data: { readings: [] } }))
       setHistory(historyRes.data?.readings || [])
-      setForecast(forecastRes.data?.forecasts || [])
     } finally {
       if (!silent) setDetailLoading(false)
     }
+  }
+
+  const loadDetails = async (sensor, silent = false) => {
+    if (!sensor) return
+    await loadHistory(sensor, silent)
   }
 
   useEffect(() => {
@@ -181,10 +164,17 @@ export default function IoTDeviceManager() {
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'hidden') return
       loadLatest()
-      if (selectedSensor) loadDetails(selectedSensor, true)
-    }, 3000)
+    }, LATEST_REFRESH_MS)
     return () => window.clearInterval(interval)
-  }, [sensors, selectedSensor])
+  }, [sensors])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'hidden' || !selectedSensor) return
+      loadHistory(selectedSensor, true)
+    }, HISTORY_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [selectedSensor])
 
   useEffect(() => {
     const connect = () => {
@@ -201,7 +191,7 @@ export default function IoTDeviceManager() {
           const msg = JSON.parse(event.data)
           if (msg.type === 'sensor_reading' && msg.sensor_id) {
             setLatestMap((prev) => ({ ...prev, [msg.sensor_id]: { ...prev[msg.sensor_id], ...msg, timestamp: msg.timestamp || msg.event_ts } }))
-            if (selectedSensorId === msg.sensor_id) loadDetails(selectedSensor, true)
+            if (selectedSensorId === msg.sensor_id) loadHistory(selectedSensor, true)
           }
           if (msg.type === 'iot_metric') {
             setLatestMap((prev) => {
@@ -337,7 +327,7 @@ export default function IoTDeviceManager() {
       showToast(err.response?.data?.detail || 'Could not send manual command', 'error')
     }
   }
-  const chartData = useMemo(() => toMinuteChartData(history, forecast), [history, forecast])
+  const chartData = useMemo(() => toMinuteChartData(history), [history])
 
   return (
     <div className="min-h-screen bg-dark-900 p-8">
@@ -486,7 +476,6 @@ export default function IoTDeviceManager() {
           sensor={selectedSensor}
           latest={latestMap[selectedSensorId] || selectedSensor.latest_reading || {}}
           history={history}
-          forecast={forecast}
           chartData={chartData}
           loading={detailLoading}
           onClose={() => setSelectedSensor(null)}
@@ -583,7 +572,7 @@ function SensorSettingMenu({
   )
 }
 
-function SensorChartModal({ sensor, latest, history, forecast, chartData, loading, onClose }) {
+function SensorChartModal({ sensor, latest, history, chartData, loading, onClose }) {
   const tempAvg = stat(history, 'temperature', 'avg')
   const tempMin = stat(history, 'temperature', 'min')
   const tempMax = stat(history, 'temperature', 'max')
@@ -599,7 +588,6 @@ function SensorChartModal({ sensor, latest, history, forecast, chartData, loadin
             <h2 className="text-2xl font-bold text-white mb-2">{sensor.name}</h2>
             <p className="text-gray-400">Last 2 hours of temperature and humidity data</p>
             <p className="text-yellow-300 text-sm mt-1">Khoảng cách điểm dữ liệu: 1 phút</p>
-            <p className="text-gray-500 text-sm mt-1">Forecast points: {forecast.length}</p>
             <p className="text-gray-500 text-sm">Updated: {latest.timestamp || latest.event_ts ? formatVNTime(latest.timestamp || latest.event_ts, true) : '--'}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
@@ -629,8 +617,6 @@ function SensorChartModal({ sensor, latest, history, forecast, chartData, loadin
                 <Legend />
                 <Line yAxisId="temp" type="monotone" dataKey="temperature" stroke="#00f0ff" strokeWidth={3} dot={false} name="temperature (actual)" />
                 <Line yAxisId="hum" type="monotone" dataKey="humidity" stroke="#38bdf8" strokeWidth={3} dot={false} name="humidity (actual)" />
-                <Line yAxisId="temp" type="monotone" dataKey="forecast_temperature" stroke="#ffd400" strokeWidth={3} dot={false} strokeDasharray="6 5" name="temperature forecast" />
-                <Line yAxisId="hum" type="monotone" dataKey="forecast_humidity" stroke="#ff7ab6" strokeWidth={3} dot={false} strokeDasharray="6 5" name="humidity forecast" />
               </LineChart>
             </ResponsiveContainer>
           )}

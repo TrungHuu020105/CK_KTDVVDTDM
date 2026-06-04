@@ -161,9 +161,18 @@ async def sync_meteostat(sensor_id: str, request: Request, hours: int = 24, curr
 
 
 @router.get("/{sensor_id}/forecast")
-async def forecast(sensor_id: str, current_user=Depends(get_current_user)):
+async def forecast(sensor_id: str, request: Request, current_user=Depends(get_current_user)):
     _ = current_user
-    return DatabricksService.fetch_forecast(sensor_id)
+    sensor_metadata = {}
+    try:
+        sensor_metadata = proxy_iot_backend(
+            "GET",
+            f"/api/sensors/{sensor_id}",
+            bearer_token=extract_bearer_token(request),
+        )
+    except HTTPException:
+        sensor_metadata = {}
+    return DatabricksService.fetch_forecast(sensor_id, sensor_metadata=sensor_metadata)
 
 
 @router.get("/{sensor_id}/model-leaderboard")

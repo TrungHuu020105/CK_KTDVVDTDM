@@ -55,24 +55,10 @@ MQTT_COMMAND_TOPIC_PREFIX = os.getenv("MQTT_COMMAND_TOPIC_PREFIX", "ptdl/devices
 MQTT_WIFI_LIST_TOPIC = os.getenv("MQTT_WIFI_LIST_TOPIC", f"{MQTT_COMMAND_TOPIC_PREFIX}/+/wifi-list")
 MQTT_DEVICE_STATE_TOPIC = os.getenv("MQTT_DEVICE_STATE_TOPIC", f"{MQTT_COMMAND_TOPIC_PREFIX}/+/state")
 
-# Kafka configuration (optional enhancement layer).
-# Keep disabled by default; enable only when Kafka broker is ready.
-KAFKA_ENABLED = os.getenv("KAFKA_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
-KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "iot-backend-producer")
-KAFKA_SENSOR_TOPIC = os.getenv("KAFKA_SENSOR_TOPIC", "iot.sensor.readings.v1")
-KAFKA_METRIC_TOPIC = os.getenv("KAFKA_METRIC_TOPIC", KAFKA_SENSOR_TOPIC)
-KAFKA_ACKS = os.getenv("KAFKA_ACKS", "1")
-KAFKA_REQUEST_TIMEOUT_MS = int(os.getenv("KAFKA_REQUEST_TIMEOUT_MS", "15000"))
-KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
-KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "")
-KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "")
-KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "")
-
 # Databricks Lakehouse integration.
 # `DATABRICKS_ENABLED` controls Databricks connectivity for services.
 # `DATABRICKS_DIRECT_WRITE_ENABLED` controls whether iot_backend writes Bronze
-# directly during ingestion. Keep it false for Kafka-first architecture.
+# directly during ingestion. Keep it false for scheduled PostgreSQL sync.
 DATABRICKS_SERVER_HOSTNAME = os.getenv("DATABRICKS_SERVER_HOSTNAME", "")
 DATABRICKS_HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH", "")
 DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN", "")

@@ -84,7 +84,6 @@ Chay lan dau theo dung thu tu sau:
 File phu:
 
 - `01b_create_missing_silver_gold_tables.sql`: chi chay khi workspace da co Bronze/Dim nhung thieu Silver/Gold.
-- `03b_kafka_to_bronze.py`: optional, chi dung khi muon ingest Kafka truc tiep vao Bronze. Hien tai PostgreSQL van la duong sync chinh.
 - `10b_generate_7day_humidity_forecast.py`: optional, chi dung khi can rerun rieng forecast humidity.
 
 ### Lich Chay Dinh Ky
@@ -196,14 +195,6 @@ DB_PASSWORD=<use Databricks secret>
 POSTGRES_TABLE=sensor_readings
 POSTGRES_LOOKBACK_DAYS=30
 ```
-
-Neu sau nay tich hop Kafka, dung:
-
-```text
-03b_kafka_to_bronze.py
-```
-
-Hien tai file Kafka chi la placeholder de giu dung numbering pipeline.
 
 ## 4. Dong Bo Meteostat
 
@@ -575,7 +566,7 @@ Dashboard nen hien:
 - Top Models: humidity.
 - Leaderboard chung, co `model_type` de phan biet `May hoc` va `Hoc sau`.
 - Forecast chart/table tu `forecast_results`.
-- System/Kafka status o cuoi dashboard.
+- System status o cuoi dashboard.
 
 ## Compute Va Packages
 

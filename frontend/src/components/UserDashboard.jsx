@@ -3,12 +3,36 @@ import { CalendarDays, Plus, Server, Thermometer, TrendingUp } from 'lucide-reac
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useDevices } from '../context/DeviceContext'
 import api from '../api'
-import { formatVNTime } from '../utils/vnTime'
+import { formatVNDate, formatVNDateTime, formatVNTime } from '../utils/vnTime'
 
 const getSensorId = (sensor) => sensor?.sensor_id || sensor?.source
 const today = () => new Date().toISOString().slice(0, 10)
 const fmt = (value, digits = 1) => value === null || value === undefined || Number.isNaN(Number(value)) ? '--' : Number(value).toFixed(digits)
-const onlyTime = (value) => value ? formatVNTime(value).split(' ').pop()?.slice(0, 5) : '--'
+const onlyTime = (value) => value ? formatVNTime(value).slice(0, 5) : '--'
+const LATEST_REFRESH_MS = 3000
+const HISTORY_REFRESH_MS = 15000
+const FORECAST_REFRESH_MS = 5 * 60 * 1000
+
+const startOfDay = (value) => new Date(`${value}T00:00:00`)
+const endOfDay = (value) => new Date(`${value}T23:59:59`)
+const dayDiffInclusive = (fromDate, toDate) => Math.max(1, Math.round((endOfDay(toDate) - startOfDay(fromDate)) / 86400000) + 1)
+const hourKey = (value) => value ? formatVNTime(value).slice(0, 2) : ''
+const average = (values) => {
+  const valid = values.filter((value) => value !== null && value !== undefined && !Number.isNaN(Number(value))).map(Number)
+  if (!valid.length) return null
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
+const listDateKeys = (fromDate, toDate) => {
+  const keys = []
+  const cursor = startOfDay(fromDate)
+  const end = startOfDay(toDate)
+  while (cursor <= end) {
+    keys.push(cursor.toISOString().slice(0, 10))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return keys
+}
 
 export default function UserDashboard() {
   const { sensors, selectedSensorId, setSelectedSensorId } = useDevices()
@@ -37,24 +61,36 @@ export default function UserDashboard() {
     setLatestMap((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))
   }
 
-  const loadChart = async () => {
+  const loadHistory = async () => {
     if (!activeSensorId) return
     try {
-      const [historyRes, forecastRes] = await Promise.all([
-        api.get(`/api/sensors/${activeSensorId}/history`, { params: { minutes: 24 * 60 } }).catch(() => ({ data: { readings: [] } })),
-        api.get(`/api/sensors/${activeSensorId}/forecast`).catch(() => ({ data: { forecasts: [] } })),
-      ])
+      const minutes = Math.max(24 * 60, dayDiffInclusive(fromDate, toDate) * 24 * 60)
+      const historyRes = await api.get(`/api/sensors/${activeSensorId}/history`, { params: { minutes } }).catch(() => ({ data: { readings: [] } }))
       setHistory(historyRes.data?.readings || [])
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Khong tai duoc du lieu dashboard.')
+    }
+  }
+
+  const loadForecast = async () => {
+    if (!activeSensorId) return
+    try {
+      const forecastRes = await api.get(`/api/sensors/${activeSensorId}/forecast`).catch(() => ({ data: { forecasts: [] } }))
       setForecast(forecastRes.data?.forecasts || [])
       setError('')
     } catch (err) {
-      setError(err.response?.data?.detail || 'Không tải được dữ liệu dashboard.')
+      setError(err.response?.data?.detail || 'Khong tai duoc du lieu dashboard.')
     }
+  }
+
+  const loadChart = async () => {
+    await Promise.all([loadHistory(), loadForecast()])
   }
 
   useEffect(() => {
     if (sensors.length && !selectedSensorId) setSelectedSensorId(getSensorId(sensors[0]))
-  }, [sensors, selectedSensorId])
+  }, [sensors, selectedSensorId, setSelectedSensorId])
 
   useEffect(() => {
     loadLatest()
@@ -68,39 +104,155 @@ export default function UserDashboard() {
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'hidden') return
       loadLatest()
-      loadChart()
-    }, 3000)
+    }, LATEST_REFRESH_MS)
     return () => window.clearInterval(interval)
-  }, [sensors, activeSensorId, fromDate, toDate])
+  }, [sensors])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      loadHistory()
+    }, HISTORY_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [activeSensorId, fromDate, toDate])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      loadForecast()
+    }, FORECAST_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [activeSensorId, fromDate, toDate])
 
   const chartData = useMemo(() => {
-    const from = new Date(`${fromDate}T00:00:00`)
-    const to = new Date(`${toDate}T23:59:59`)
-    const actual = (history || [])
-      .filter((row) => {
-        const stamp = new Date(row.timestamp || row.event_ts)
-        return stamp >= from && stamp <= to
+    const normalizedFrom = fromDate <= toDate ? fromDate : toDate
+    const normalizedTo = fromDate <= toDate ? toDate : fromDate
+    const from = startOfDay(normalizedFrom)
+    const to = endOfDay(normalizedTo)
+    const singleDay = normalizedFrom === normalizedTo
+    const now = new Date()
+    const rawActual = (history || []).filter((row) => {
+      const stamp = new Date(row.timestamp || row.event_ts)
+      return stamp >= from && stamp <= to
+    })
+    const latestActualTs = rawActual.length
+      ? rawActual
+        .map((row) => new Date(row.timestamp || row.event_ts))
+        .sort((a, b) => a - b)
+        .at(-1)
+      : null
+    const futureCutoffTs = latestActualTs
+      ? new Date(Math.max(latestActualTs.getTime(), now.getTime()))
+      : now
+
+    const actual = rawActual
+      .map((row) => {
+        const timestamp = row.timestamp || row.event_ts
+        return {
+          timestamp,
+          label: singleDay ? onlyTime(timestamp) : formatVNDate(timestamp),
+          tooltipLabel: formatVNDateTime(timestamp, false),
+          temperature: row.temperature,
+          humidity: row.humidity,
+          forecast_temperature: null,
+          forecast_humidity: null,
+        }
       })
-      .map((row) => ({
-        timestamp: row.timestamp || row.event_ts,
-        time: onlyTime(row.timestamp || row.event_ts),
-        temperature: row.temperature,
-        humidity: row.humidity,
-        forecast_temperature: null,
-        forecast_humidity: null,
-      }))
-    const predicted = (forecast || []).map((row) => ({
-      timestamp: row.forecast_ts || row.timestamp || row.event_ts,
-      time: onlyTime(row.forecast_ts || row.timestamp || row.event_ts),
-      temperature: null,
-      humidity: null,
-      forecast_temperature: row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : null),
-      forecast_humidity: row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : null),
-    }))
+
+    const predicted = (forecast || [])
+      .filter((row) => {
+        const stamp = new Date(row.forecast_ts || row.timestamp || row.event_ts)
+        if (stamp < from || stamp > to) return false
+        if (stamp <= futureCutoffTs) return false
+        return true
+      })
+      .map((row) => {
+        const timestamp = row.forecast_ts || row.timestamp || row.event_ts
+        return {
+          timestamp,
+          label: singleDay ? onlyTime(timestamp) : formatVNDate(timestamp),
+          tooltipLabel: formatVNDateTime(timestamp, false),
+          temperature: null,
+          humidity: null,
+          forecast_temperature: row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : null),
+          forecast_humidity: row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : null),
+        }
+      })
+
+    if (singleDay) {
+      const actualByHour = new Map()
+      const forecastByHour = new Map()
+
+      for (const row of actual) {
+        const key = hourKey(row.timestamp)
+        if (!actualByHour.has(key)) actualByHour.set(key, [])
+        actualByHour.get(key).push(row)
+      }
+
+      for (const row of predicted) {
+        const key = hourKey(row.timestamp)
+        if (!forecastByHour.has(key)) forecastByHour.set(key, [])
+        forecastByHour.get(key).push(row)
+      }
+
+      const hours = Array.from(new Set([
+        ...actualByHour.keys(),
+        ...forecastByHour.keys(),
+      ])).sort((a, b) => Number(a) - Number(b))
+
+      return hours.map((hour) => {
+        const actualRows = actualByHour.get(hour) || []
+        const forecastRows = forecastByHour.get(hour) || []
+        return {
+          timestamp: `${normalizedFrom}T${hour}:00:00`,
+          label: `${hour}:00`,
+          tooltipLabel: `${normalizedFrom} ${hour}:00`,
+          temperature: average(actualRows.map((row) => row.temperature)),
+          humidity: average(actualRows.map((row) => row.humidity)),
+          forecast_temperature: average(forecastRows.map((row) => row.forecast_temperature)),
+          forecast_humidity: average(forecastRows.map((row) => row.forecast_humidity)),
+        }
+      })
+    }
+
+    if (!singleDay) {
+      const actualByDate = new Map()
+      const forecastByDate = new Map()
+
+      for (const row of actual) {
+        const dateKey = formatVNDate(row.timestamp)
+        if (!actualByDate.has(dateKey)) actualByDate.set(dateKey, [])
+        actualByDate.get(dateKey).push(row)
+      }
+
+      for (const row of predicted) {
+        const dateKey = formatVNDate(row.timestamp)
+        if (!forecastByDate.has(dateKey)) forecastByDate.set(dateKey, [])
+        forecastByDate.get(dateKey).push(row)
+      }
+
+      return listDateKeys(normalizedFrom, normalizedTo).map((dateKey) => {
+        const actualRows = actualByDate.get(dateKey) || []
+        const forecastRows = forecastByDate.get(dateKey) || []
+        return {
+          timestamp: `${dateKey}T00:00:00`,
+          label: dateKey,
+          tooltipLabel: dateKey,
+          temperature: average(actualRows.map((row) => row.temperature)),
+          humidity: average(actualRows.map((row) => row.humidity)),
+          forecast_temperature: average(forecastRows.map((row) => row.forecast_temperature)),
+          forecast_humidity: average(forecastRows.map((row) => row.forecast_humidity)),
+        }
+      })
+    }
+
     return [...actual, ...predicted].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
   }, [history, forecast, fromDate, toDate])
+  const hasForecastPoints = chartData.some((row) => row.forecast_temperature !== null || row.forecast_humidity !== null)
+  const forecastPointCount = chartData.filter((row) => row.forecast_temperature !== null || row.forecast_humidity !== null).length
+  const showForecastDots = forecastPointCount <= 2
 
-  const forecastSnapshot = forecast.find((row) => row.target === 'temperature') || forecast[0]
+  const forecastSnapshot = forecast.find((row) => row.temperature !== null && row.temperature !== undefined) || forecast[0]
   const forecastTemp = forecastSnapshot?.temperature ?? forecastSnapshot?.predicted_temperature ?? forecastSnapshot?.predicted_value
   const confidence = forecastSnapshot?.confidence ?? forecastSnapshot?.confidence_score
 
@@ -108,13 +260,13 @@ export default function UserDashboard() {
     <div className="min-h-screen bg-dark-900 p-8">
       <div className="mb-8">
         <h1 className="text-4xl font-bold text-white mb-2">Dashboard</h1>
-        <p className="text-gray-400">Theo dõi nhanh thiết bị, dữ liệu thực tế và phần dự báo trong cùng một màn hình.</p>
+        <p className="text-gray-400">Theo doi nhanh thiet bi, du lieu thuc te va phan du bao trong cung mot man hinh.</p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
         <SummaryCard icon={Thermometer} title="IoT Devices" value={sensors.length} action="+ Add Device" />
-        <SummaryCard icon={Server} title="Active Sensors" value={sensors.filter((sensor) => sensor.is_active !== false).length} detail="Chỉ tính những sensor còn hoạt động." />
-        <SummaryCard icon={TrendingUp} title="Forecast Snapshot" value={fmt(forecastTemp, 4)} detail={`Mức tin cậy: ${confidence ? `${Math.round(Number(confidence) * 100)}%` : '--'}`} yellow />
+        <SummaryCard icon={Server} title="Active Sensors" value={sensors.filter((sensor) => sensor.is_active !== false).length} detail="Chi tinh nhung sensor con hoat dong." />
+        <SummaryCard icon={TrendingUp} title="Forecast Snapshot" value={fmt(forecastTemp, 4)} detail={`Muc tin cay: ${confidence ? `${Math.round(Number(confidence) * 100)}%` : '--'}`} yellow />
       </div>
 
       <div className="rounded-xl border border-neon-cyan/20 bg-dark-800 p-6">
@@ -123,7 +275,7 @@ export default function UserDashboard() {
           <h2 className="text-2xl font-bold text-white">Forecast View</h2>
         </div>
         <p className="text-gray-400 text-sm mb-6">
-          Chọn 1 ngày để xem dữ liệu theo giờ. Biểu đồ hiện 2 chỉ số: nhiệt độ và độ ẩm.
+          Chon 1 ngay de xem du lieu theo gio. Bieu do hien 2 chi so: nhiet do va do am.
         </p>
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-5">
@@ -163,28 +315,38 @@ export default function UserDashboard() {
           <div className="flex items-start justify-between mb-4">
             <div>
               <h3 className="text-white font-semibold">Chart Output</h3>
-              <p className="text-gray-500 text-sm">Recorded là dữ liệu thật, Forecast là kết quả Databricks nếu đã chạy notebook.</p>
+              <p className="text-gray-500 text-sm">Recorded la du lieu that, Forecast la ket qua Databricks. Forecast chi hien thi tu thoi diem hien tai tro di.</p>
+              {!hasForecastPoints && (
+                <p className="text-amber-300 text-xs mt-2">Khung ngay dang chon hien khong con moc forecast nao o tuong lai.</p>
+              )}
+              {hasForecastPoints && showForecastDots && (
+                <p className="text-cyan-300 text-xs mt-2">Khung ngay dang chon chi con {forecastPointCount} moc forecast o tuong lai, nen dashboard hien cham du bao thay vi duong dai.</p>
+              )}
             </div>
             <div className="text-sm text-gray-400">
-              Latest: <span className="text-neon-cyan">{fmt(latest.temperature)}°C</span> / <span className="text-sky-300">{fmt(latest.humidity)}%</span>
+              Latest: <span className="text-neon-cyan">{fmt(latest.temperature)}C</span> / <span className="text-sky-300">{fmt(latest.humidity)}%</span>
             </div>
           </div>
 
           {chartData.length === 0 ? (
-            <div className="h-[420px] flex items-center justify-center text-gray-400">Chưa có dữ liệu realtime cho sensor này.</div>
+            <div className="h-[420px] flex items-center justify-center text-gray-400">Chua co du lieu realtime cho sensor nay.</div>
           ) : (
             <ResponsiveContainer width="100%" height={420}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="4 4" stroke="#202a4a" />
-                <XAxis dataKey="time" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
+                <XAxis dataKey="label" stroke="#9CA3AF" tick={{ fontSize: 11 }} minTickGap={20} />
                 <YAxis yAxisId="temp" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
                 <YAxis yAxisId="hum" orientation="right" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
-                <Tooltip contentStyle={{ backgroundColor: '#111827', border: '1px solid #00f0ff', borderRadius: 8 }} />
+                <Tooltip
+                  labelFormatter={(_, payload) => payload?.[0]?.payload?.tooltipLabel || '--'}
+                  formatter={(value, name) => [fmt(value, 2), name]}
+                  contentStyle={{ backgroundColor: '#111827', border: '1px solid #00f0ff', borderRadius: 8 }}
+                />
                 <Legend />
                 <Line yAxisId="temp" type="monotone" dataKey="temperature" stroke="#ff6680" strokeWidth={3} dot={false} name="temperature recorded" />
                 <Line yAxisId="hum" type="monotone" dataKey="humidity" stroke="#38bdf8" strokeWidth={3} dot={false} name="humidity recorded" />
-                <Line yAxisId="temp" type="monotone" dataKey="forecast_temperature" stroke="#ffd400" strokeWidth={3} strokeDasharray="6 5" dot={false} name="temperature forecast" />
-                <Line yAxisId="hum" type="monotone" dataKey="forecast_humidity" stroke="#ff7ab6" strokeWidth={3} strokeDasharray="6 5" dot={false} name="humidity forecast" />
+                <Line yAxisId="temp" type="monotone" dataKey="forecast_temperature" stroke="#ffd400" strokeWidth={3} strokeDasharray="6 5" dot={showForecastDots ? { r: 4, fill: '#ffd400', stroke: '#ffd400' } : false} activeDot={{ r: 6 }} name="temperature forecast" />
+                <Line yAxisId="hum" type="monotone" dataKey="forecast_humidity" stroke="#ff7ab6" strokeWidth={3} strokeDasharray="6 5" dot={showForecastDots ? { r: 4, fill: '#ff7ab6', stroke: '#ff7ab6' } : false} activeDot={{ r: 6 }} name="humidity forecast" />
               </LineChart>
             </ResponsiveContainer>
           )}
