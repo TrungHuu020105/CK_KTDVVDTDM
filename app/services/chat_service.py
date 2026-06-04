@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from sqlalchemy.orm import Session
 
 from app.config import GEMINI_API_KEY, GEMINI_MODEL
-from app.models import IoTDevice, Metric, Alert, User
+from app.models import IoTDevice, SensorReading, Alert, User
 from app import crud
 
 
@@ -63,23 +63,38 @@ def _normalize_text(text: str) -> str:
     return _strip_accents(raw)
 
 
-def _summarize_user_context(db: Session, user: User) -> dict:
-    sources = crud.get_user_accessible_sources(db, user.id)
-    limited_sources = sources[:6]
+def _format_context_time(value: datetime | None) -> tuple[str | None, str | None, float | None]:
+    if value is None:
+        return None, None, None
+    current = value
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone(timedelta(hours=7)))
+    else:
+        current = current.astimezone(timezone(timedelta(hours=7)))
+    now_vn = datetime.now(timezone(timedelta(hours=7)))
+    age_minutes = round(max(0.0, (now_vn - current).total_seconds() / 60), 1)
+    return current.isoformat(), current.strftime("%Y-%m-%d %H:%M:%S"), age_minutes
 
+
+def _summarize_user_context(db: Session, user: User) -> dict:
     devices = (
         db.query(IoTDevice)
         .filter(IoTDevice.user_id == user.id, IoTDevice.is_active == True)
         .order_by(IoTDevice.created_at.desc())
         .all()
     )
+    device_sources = [str(d.source).strip() for d in devices if str(d.source or "").strip()]
+    limited_sources = device_sources[:6]
+    device_ids = [d.id for d in devices if d.id is not None]
 
+    latest_sensor_readings = []
     latest_metrics = []
+    latest_reading_status = []
     if limited_sources:
         rows = (
-            db.query(Metric)
-            .filter(Metric.sensor_id.in_(limited_sources))
-            .order_by(Metric.sensor_id.asc(), Metric.event_ts.desc())
+            db.query(SensorReading)
+            .filter(SensorReading.sensor_id.in_(limited_sources))
+            .order_by(SensorReading.sensor_id.asc(), SensorReading.event_ts.desc())
             .all()
         )
         latest_by_source = {}
@@ -94,24 +109,62 @@ def _summarize_user_context(db: Session, user: User) -> dict:
             row = latest_by_source.get(source)
             if not row:
                 continue
-            latest_metrics.append(
+            event_ts_iso, event_ts_display, age_minutes = _format_context_time(row.event_ts)
+            latest_sensor_readings.append(
                 {
                     "source": row.sensor_id,
-                    "metric_type": row.metric_type,
-                    "value": row.metric_value,
-                    "unit": row.unit,
-                    "event_ts": row.event_ts.isoformat() if row.event_ts else None,
+                    "event_ts": event_ts_iso,
+                    "event_ts_display": event_ts_display,
+                    "age_minutes": age_minutes,
+                    "temperature": row.temperature,
+                    "humidity": row.humidity,
+                    "temperature_unit": row.temperature_unit,
+                    "humidity_unit": row.humidity_unit,
+                    "source_type": row.source_type,
+                    "provider": row.provider,
+                    "environment_type": row.environment_type,
+                    "location": row.location,
+                    "location_province": row.location_province,
                 }
             )
+            latest_reading_status.append(
+                {
+                    "source": row.sensor_id,
+                    "last_seen_at": event_ts_iso,
+                    "last_seen_display": event_ts_display,
+                    "age_minutes": age_minutes,
+                }
+            )
+            if row.temperature is not None:
+                latest_metrics.append(
+                    {
+                        "source": row.sensor_id,
+                        "metric_type": "temperature",
+                        "value": row.temperature,
+                        "unit": row.temperature_unit,
+                        "event_ts": event_ts_iso,
+                        "event_ts_display": event_ts_display,
+                    }
+                )
+            if row.humidity is not None:
+                latest_metrics.append(
+                    {
+                        "source": row.sensor_id,
+                        "metric_type": "humidity",
+                        "value": row.humidity,
+                        "unit": row.humidity_unit,
+                        "event_ts": event_ts_iso,
+                        "event_ts_display": event_ts_display,
+                    }
+                )
 
     threshold_time = datetime.now(timezone(timedelta(hours=7))) - timedelta(hours=24)
-    alerts_24h = (
-        db.query(Alert)
-        .filter(Alert.source.in_(sources), Alert.created_at >= threshold_time)
-        .order_by(Alert.created_at.desc())
-        .limit(20)
-        .all()
-    )
+    alerts_query = db.query(Alert).filter(Alert.created_at >= threshold_time)
+    if device_ids:
+        alerts_query = alerts_query.filter(Alert.device_id.in_(device_ids))
+    else:
+        alerts_query = alerts_query.filter(Alert.id == -1)
+    alerts_24h = alerts_query.order_by(Alert.created_at.desc()).limit(20).all()
 
     return {
         "user": {"id": user.id, "username": user.username},
@@ -122,10 +175,16 @@ def _summarize_user_context(db: Session, user: User) -> dict:
                 "source": d.source,
                 "location": d.location,
                 "environment_type": d.environment_type,
+                "task_description": d.task_description,
+                "priority_level": d.priority_level,
+                "action_hint": d.action_hint,
                 "active": d.is_active,
             }
             for d in devices
         ],
+        "device_sources": device_sources,
+        "latest_reading_status": latest_reading_status,
+        "latest_sensor_readings": latest_sensor_readings,
         "latest_metrics": latest_metrics,
         "alerts_last_24h_count": len(alerts_24h),
         "alerts_last_24h_samples": [
@@ -168,13 +227,23 @@ def generate_user_bot_reply(db: Session, user: User, user_message: str) -> str:
     system_instruction = (
         "Bạn là trợ lý IoT cho người dùng cuối. "
         "Chỉ dùng dữ liệu được cung cấp trong CONTEXT. "
-        "Trả lời tiếng Việt, ngắn gọn, thực tế, có bước hành động."
+        "Trả lời tiếng Việt, ngắn gọn, thực tế, có bước hành động. "
+        "CHỈ được nhắc đến sensor có trong devices hoặc device_sources. "
+        "Nếu một sensor không xuất hiện trong latest_sensor_readings thì KHÔNG được kết luận mất kết nối, lỗi, hoặc ngừng hoạt động; "
+        "chỉ được nói là 'không có bản ghi đọc mới trong context hiện tại' nếu thật sự cần thiết. "
+        "Không được suy diễn tồn tại của sensor ngoài danh sách thiết bị hiện có của user. "
+        "Nếu nhắc đến thời gian cập nhật/phát sinh, PHẢI nêu mốc giờ chính xác từ context, không được chỉ nói chung theo ngày."
     )
     prompt = (
         "CONTEXT JSON:\n"
         f"{json.dumps(context, ensure_ascii=False)}\n\n"
         "USER MESSAGE:\n"
         f"{user_message}\n\n"
+        "Quy tắc suy luận:\n"
+        "- Chỉ dùng sensor trong devices/device_sources.\n"
+        "- Không được coi việc thiếu latest_sensor_readings là bằng chứng sensor mất kết nối.\n"
+        "- Nếu nói về thời gian cập nhật, phải dùng event_ts_display hoặc last_seen_display, không được rút gọn chỉ còn ngày.\n"
+        "- Nếu context không đủ, phải nói rõ là chưa đủ dữ liệu trong context hiện tại.\n\n"
         "Yêu cầu format:\n"
         "1) Nhận định nhanh\n"
         "2) Vì sao (bám dữ liệu)\n"

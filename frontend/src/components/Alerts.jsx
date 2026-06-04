@@ -78,35 +78,27 @@ export default function Alerts() {
       const response = await api.get(`/api/alerts/${alert.id}/explain-ai`)
       const apiSuccess = Boolean(response?.data?.success)
       const apiMessage = response?.data?.message || ''
-      const apiErrorCode = response?.data?.error_code || null
-      const apiErrorDetail = response?.data?.error_detail || null
       const apiRetryAfter = response?.data?.retry_after_seconds
       const shortMessage = apiMessage?.split('Chi tiet ky thuat:')[0]?.trim() || apiMessage
       const explanation = apiSuccess
         ? (response?.data?.explanation || 'Không có nội dung giải thích.')
         : `Không thể tạo giải thích AI: ${shortMessage || 'Lỗi không xác định từ backend.'}`
-      const retryLine = !apiSuccess && apiRetryAfter
-        ? `\n[Debug] retry_after_seconds: ${apiRetryAfter}`
-        : ''
-      const debugText = !apiSuccess
-        ? `\n\n[Debug] error_code: ${apiErrorCode || 'N/A'}${retryLine}\n[Debug] error_detail: ${apiErrorDetail || 'N/A'}`
+      const retryText = !apiSuccess && apiRetryAfter
+        ? `\n\nBạn có thể thử lại sau khoảng ${apiRetryAfter} giây.`
         : ''
       setAiExplainModal({
         open: true,
         title: `${formatMetricName(alert.metric_type)} - ${alert.status.toUpperCase()}`,
-        content: `${explanation}${debugText}`,
+        content: `${explanation}${retryText}`,
         meta: response?.data?.context || null,
       })
     } catch (error) {
-      const httpStatus = error?.response?.status
       const backendDetail = error?.response?.data?.detail
       setAiExplainModal({
         open: true,
         title: 'Giải thích bằng AI',
         content:
-          `Không thể tạo giải thích AI: ${backendDetail || error.message}\n\n` +
-          `[Debug] http_status: ${httpStatus || 'N/A'}\n` +
-          `[Debug] backend_detail: ${backendDetail || 'N/A'}`,
+          `Không thể tạo giải thích AI: ${backendDetail || error.message}`,
         meta: null,
       })
     } finally {
@@ -269,7 +261,7 @@ export default function Alerts() {
             </div>
             {aiExplainModal.meta && (
               <p className="text-sm md:text-base text-gray-400 mb-4">
-                Weather context: {aiExplainModal.meta.has_weather ? 'available' : 'not available'} | Environment: {aiExplainModal.meta.environment_type || 'unknown'}
+                Ngữ cảnh thời tiết: {aiExplainModal.meta.has_weather ? 'có dữ liệu' : 'không có dữ liệu'} | Môi trường: {aiExplainModal.meta.environment_type || 'không rõ'}
               </p>
             )}
             <pre className="whitespace-pre-wrap text-gray-200 leading-8 font-sans text-base md:text-lg bg-dark-900/60 rounded-lg p-5 md:p-6 border border-gray-700 max-h-[60vh] overflow-y-auto">

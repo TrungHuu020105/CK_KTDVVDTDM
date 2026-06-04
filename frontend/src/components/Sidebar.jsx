@@ -10,7 +10,6 @@ export default function Sidebar({ activeMenu, setActiveMenu, health }) {
     ? [
         { id: 'dashboard', label: 'Cloud Overview', icon: Gauge },
         { id: 'iot-devices', label: 'IoT Devices', icon: Thermometer },
-        { id: 'ml-report', label: 'Model Report', icon: BrainCircuit },
         { id: 'support-chat', label: 'Customer Chat', icon: MessageCircle },
       ]
     : [

@@ -67,11 +67,11 @@ export default function SupportChat() {
     }
   }
 
-  const loadMessages = async (conversationId) => {
+  const loadMessages = async (conversationId, options = {}) => {
     if (!conversationId) return
     if (document.visibilityState === 'hidden') return
     // Keep optimistic user message visible while waiting bot response.
-    if (loading) return
+    if (loading && !options.allowWhileLoading) return
     if (messagesLoadingRef.current) return
     try {
       messagesLoadingRef.current = true
@@ -142,12 +142,25 @@ export default function SupportChat() {
         message: content,
       })
       const cid = res.data?.conversation_id || selectedConversationId
+      const persistedUserMessage = res.data?.user_message || null
+      const botMessage = res.data?.bot_message || null
       setShowOtherIssueInput(false)
       setOtherIssueText('')
       if (cid) setSelectedConversationId(cid)
       setThinkingConversationId(cid || null)
+      setMessages((prev) => {
+        const next = prev.filter((m) => m.id !== optimisticMessage.id)
+        const existingIds = new Set(next.map((m) => m.id))
+        for (const item of [persistedUserMessage, botMessage]) {
+          if (item && !existingIds.has(item.id)) {
+            next.push(item)
+            existingIds.add(item.id)
+          }
+        }
+        return next
+      })
       await loadConversations()
-      if (cid) await loadMessages(cid)
+      if (cid) await loadMessages(cid, { allowWhileLoading: true })
     } catch (err) {
       console.error('Failed to send user message:', err)
       setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
@@ -167,7 +180,7 @@ export default function SupportChat() {
       const cid = res.data?.conversation_id
       if (cid) setSelectedConversationId(cid)
       await loadConversations()
-      if (cid) await loadMessages(cid)
+      if (cid) await loadMessages(cid, { allowWhileLoading: true })
     } catch (err) {
       console.error('Failed to escalate chat:', err)
     } finally {
@@ -183,7 +196,7 @@ export default function SupportChat() {
       await api.post(`/api/chat/admin/conversations/${selectedConversationId}/reply`, { message: content })
       setMessage('')
       await loadConversations()
-      await loadMessages(selectedConversationId)
+      await loadMessages(selectedConversationId, { allowWhileLoading: true })
     } catch (err) {
       console.error('Failed to send admin reply:', err)
     } finally {
@@ -197,7 +210,7 @@ export default function SupportChat() {
       setLoading(true)
       await api.post(`/api/chat/admin/conversations/${selectedConversationId}/close`)
       await loadConversations()
-      await loadMessages(selectedConversationId)
+      await loadMessages(selectedConversationId, { allowWhileLoading: true })
     } catch (err) {
       console.error('Failed to close conversation:', err)
     } finally {
@@ -214,7 +227,7 @@ export default function SupportChat() {
       await loadConversations()
       if (cid) {
         setSelectedConversationId(cid)
-        await loadMessages(cid)
+        await loadMessages(cid, { allowWhileLoading: true })
       }
     } catch (err) {
       console.error('Failed to create conversation:', err)

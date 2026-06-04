@@ -197,7 +197,20 @@ async def explain_alert_with_ai(
         raise HTTPException(status_code=404, detail="Alert not found")
     _ensure_alert_access(db, current_user, alert)
 
-    device = db.query(IoTDevice).filter(IoTDevice.source == alert.source).first()
+    device = None
+    if alert.device_id is not None:
+        device = db.query(IoTDevice).filter(IoTDevice.id == alert.device_id).first()
+    if device is None and alert.metric_type:
+        device = (
+            db.query(IoTDevice)
+            .filter(
+                IoTDevice.source == alert.source,
+                IoTDevice.device_type.in_([alert.metric_type, "temperature_humidity"]),
+            )
+            .first()
+        )
+    if device is None:
+        device = db.query(IoTDevice).filter(IoTDevice.source == alert.source).first()
     environment_type = (device.environment_type if device and device.environment_type else "indoor").lower()
     is_outdoor = environment_type == "outdoor"
 

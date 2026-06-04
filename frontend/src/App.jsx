@@ -6,6 +6,7 @@ import api from './api'
 import Sidebar from './components/Sidebar'
 import UserDashboard from './components/UserDashboard'
 import AdminDashboard from './components/AdminDashboard'
+import AdminIoTOverview from './components/AdminIoTOverview'
 import CPUMetrics from './components/CPUMetrics'
 import IoTMetrics from './components/IoTMetrics'
 import IoTDeviceManager from './components/IoTDeviceManager'
@@ -53,7 +54,7 @@ function AppContent() {
           return <UserDashboard />
         }
       case 'iot-devices':
-        return <IoTDeviceManager />
+        return user?.role === 'admin' ? <AdminIoTOverview /> : <IoTDeviceManager />
       case 'cpu':
         return <CPUMetrics />
       case 'memory':
@@ -69,7 +70,7 @@ function AppContent() {
       case 'support-chat':
         return <SupportChat />
       case 'ml-report':
-        return <DatabricksModelReport />
+        return user?.role === 'admin' ? <AdminDashboard /> : <DatabricksModelReport />
       default:
         // Default: admin gets dashboard, users get IoT devices (UserDashboard)
         return user?.role === 'admin' ? <AdminDashboard /> : <UserDashboard />
