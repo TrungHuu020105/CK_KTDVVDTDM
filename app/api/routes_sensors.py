@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.api.iot_backend_proxy import extract_bearer_token, proxy_iot_backend
@@ -176,6 +176,15 @@ async def forecast(sensor_id: str, request: Request, current_user=Depends(get_cu
 
 
 @router.get("/{sensor_id}/model-leaderboard")
-async def model_leaderboard(sensor_id: str, current_user=Depends(get_current_user)):
+async def model_leaderboard(sensor_id: str, request: Request, current_user=Depends(get_current_user)):
     _ = current_user
-    return DatabricksService.fetch_model_leaderboard(sensor_id)
+    sensor_metadata = {}
+    try:
+        sensor_metadata = proxy_iot_backend(
+            "GET",
+            f"/api/sensors/{sensor_id}",
+            bearer_token=extract_bearer_token(request),
+        )
+    except HTTPException:
+        sensor_metadata = {}
+    return DatabricksService.fetch_model_leaderboard(sensor_id, sensor_metadata=sensor_metadata)

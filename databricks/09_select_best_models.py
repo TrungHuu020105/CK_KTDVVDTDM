@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 """Select best global and per-location models after ML and DL training.
 
 Run after:

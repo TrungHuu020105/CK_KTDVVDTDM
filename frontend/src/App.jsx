@@ -14,6 +14,7 @@ import Alerts from './components/Alerts'
 import AdminPanel from './components/AdminPanel'
 import ClientMonitor from './components/ClientMonitor'
 import SupportChat from './components/SupportChat'
+import DatabricksModelReport from './components/DatabricksModelReport'
 import Login from './components/Login'
 
 function AppContent() {
@@ -67,6 +68,8 @@ function AppContent() {
         return <AdminPanel />
       case 'support-chat':
         return <SupportChat />
+      case 'ml-report':
+        return <DatabricksModelReport />
       default:
         // Default: admin gets dashboard, users get IoT devices (UserDashboard)
         return user?.role === 'admin' ? <AdminDashboard /> : <UserDashboard />

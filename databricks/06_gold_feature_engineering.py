@@ -1,10 +1,4 @@
-# Databricks notebook source
-
 """Build the Gold training dataset for 168-hour weather forecasting."""
-
-# COMMAND ----------
-
-# Imports
 
 import os
 from pathlib import Path
@@ -14,10 +8,6 @@ from pyspark.sql import functions as F
 from pyspark import StorageLevel
 
 
-# COMMAND ----------
-
-# Constants and configuration
-
 DEFAULTS = {
     "DATABRICKS_CATALOG": "dtdm",
     "DATABRICKS_SCHEMA": "metrics_app_streaming",
@@ -26,10 +16,6 @@ DEFAULTS = {
 
 STALE_CATALOG_WARNING_SHOWN = False
 
-
-# COMMAND ----------
-
-# Environment and widget helpers
 
 def load_local_env():
     candidates = []
@@ -116,10 +102,6 @@ def overwrite_existing_table(df, table_name):
     spark.sql("TRUNCATE TABLE " + target_table)  # type: ignore[name-defined]
     df.write.format("delta").mode("append").saveAsTable(target_table)
 
-
-# COMMAND ----------
-
-# Main execution
 
 def main():
     create_widgets()
@@ -216,6 +198,5 @@ def main():
         training.unpersist()
 
 
-# COMMAND ----------
-
-main()
+if __name__ == "__main__":
+    main()

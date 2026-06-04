@@ -1,5 +1,3 @@
-# Databricks notebook source
-
 """Sync Meteostat hourly weather data to Bronze by location-year batches.
 
 Input:
@@ -12,10 +10,6 @@ Output:
 Run 02_seed_dim_locations.py first when dim_location only has ESP32 locations.
 Default sync range is START_YEAR=2022 through END_YEAR=2025.
 """
-
-# COMMAND ----------
-
-# Imports
 
 import os
 import subprocess
@@ -41,10 +35,6 @@ from pyspark.sql.types import (
 warnings.filterwarnings("ignore", message="Support for nested sequences for 'parse_dates'.*", category=FutureWarning)
 warnings.filterwarnings("ignore", message="'H' is deprecated.*", category=FutureWarning)
 
-
-# COMMAND ----------
-
-# Constants and table schemas
 
 DEFAULTS = {
     "DATABRICKS_CATALOG": "dtdm",
@@ -176,10 +166,6 @@ COLLECTION_SUMMARY_SCHEMA = StructType(
     ]
 )
 
-
-# COMMAND ----------
-
-# Environment, widgets, and general helpers
 
 def load_local_env():
     candidates = []
@@ -327,10 +313,6 @@ def print_active_config():
     for key, value in active_config().items():
         print("  " + key + "=" + str(value))
 
-
-# COMMAND ----------
-
-# Catalog and location loading
 
 def table_exists(table_name):
     name = table_name.split(".")[-1]
@@ -494,10 +476,6 @@ def load_locations():
     return [row.asDict() for row in rows]
 
 
-# COMMAND ----------
-
-# Meteostat runtime and normalization helpers
-
 def ensure_meteostat_runtime():
     patch_pandas_parse_dates_for_meteostat()
     try:
@@ -616,10 +594,6 @@ def normalize_meteostat_frame(frame, location, fetch_method, station_meta):
     ]
 
 
-# COMMAND ----------
-
-# Coverage and station metadata helpers
-
 def count_available_metric_columns(frame):
     count = 0
     for column in ["temperature_c", "relative_humidity"]:
@@ -674,10 +648,6 @@ def station_meta_from_row(location, station_id, row):
         "created_at": utc_now(),
     }
 
-
-# COMMAND ----------
-
-# Station metadata table writes
 
 def upsert_weather_stations(station_metas, selected_station_id):
     if not station_metas:
@@ -740,10 +710,6 @@ def write_station_mapping(location, year, fetch_meta, row_count, expected_hours,
         .execute()
     )
 
-
-# COMMAND ----------
-
-# Meteostat fetch logic
 
 def fetch_nearby_station_year(location, year, start_dt, end_dt):
     Hourly, Point, Stations = ensure_meteostat_runtime()
@@ -878,10 +844,6 @@ def fetch_nearby_station_year(location, year, start_dt, end_dt):
     return best["frame"], selected_meta, station_metas
 
 
-# COMMAND ----------
-
-# Location-year fetch fallback
-
 def fetch_location_year(location, year):
     Hourly, Point, Stations = ensure_meteostat_runtime()
     altitude = location.get("altitude")
@@ -941,10 +903,6 @@ def fetch_location_year(location, year):
         return normalized, point_meta, station_metas
     return pd.DataFrame(), {"fetch_method": None, "station_id": None, "station_name": None, "distance_km": None, "latitude": None, "longitude": None, "expected_hours": expected_hours, "coverage_ratio": 0.0}, station_metas
 
-
-# COMMAND ----------
-
-# Status and collection summary helpers
 
 def sql_string(value):
     if value is None:
@@ -1109,10 +1067,6 @@ def print_collection_summary():
         )
 
 
-# COMMAND ----------
-
-# Bronze batch writes
-
 def write_location_year_batch(df, target_table, location_id, year):
     if df.limit(1).count() == 0:
         return 0
@@ -1136,10 +1090,6 @@ def write_location_year_batch(df, target_table, location_id, year):
     df.coalesce(1).write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(target_table)
     return df.count()
 
-
-# COMMAND ----------
-
-# Main execution
 
 def main():
     create_widgets()
@@ -1221,6 +1171,5 @@ def main():
     print("Meteostat sync complete. Rows written this run: " + str(total_synced_rows))
 
 
-# COMMAND ----------
-
-main()
+if __name__ == "__main__":
+    main()

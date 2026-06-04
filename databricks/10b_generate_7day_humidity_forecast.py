@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 """Generate 168-hour humidity forecasts for locations using best models selected by 09.
 
 Flow:
@@ -50,10 +49,6 @@ DEFAULTS = {
     "forecast_model_strategy": "global_best_type",
     "FORECAST_FORCE_LOCAL_REFIT": "true",
     "forecast_force_local_refit": "true",
-    "FORECAST_PREFER_SPARK_MLLIB": "true",
-    "forecast_prefer_spark_mllib": "true",
-    "FORECAST_PREFERRED_MODEL_NAME": "Spark Random Forest",
-    "forecast_preferred_model_name": "Spark Random Forest",
     "LOCATION_SET": "current_34",
     "location_set": "current_34",
     "INCLUDE_INACTIVE_LOCATIONS": "false",
@@ -348,10 +343,6 @@ def select_best_model(metrics_pdf, target_variable, location_id):
     if base.empty:
         return None
 
-    preferred = preferred_spark_model(base)
-    if preferred is not None:
-        return preferred
-
     strategy = setting_any("FORECAST_MODEL_STRATEGY", "forecast_model_strategy").strip().lower()
     global_rows = base[(base["training_mode"] == "global") & (base["is_best"] == True)]
     if global_rows.empty:
@@ -373,29 +364,6 @@ def select_best_model(metrics_pdf, target_variable, location_id):
     if not global_rows.empty:
         return global_rows.sort_values(["rmse", "mae", "r2"], ascending=[True, True, False]).iloc[0].to_dict()
     return None
-
-
-def preferred_spark_model(base):
-    if not bool_setting("FORECAST_PREFER_SPARK_MLLIB", "forecast_prefer_spark_mllib"):
-        return None
-    if "model_type" not in base.columns:
-        return None
-
-    spark_rows = base[base["model_type"] == "spark_mllib"].copy()
-    if spark_rows.empty:
-        return None
-
-    preferred_name = setting_any("FORECAST_PREFERRED_MODEL_NAME", "forecast_preferred_model_name").strip().lower()
-    if preferred_name:
-        exact_rows = spark_rows[spark_rows["model_name"].fillna("").astype(str).str.lower() == preferred_name]
-        if not exact_rows.empty:
-            return exact_rows.sort_values(["rmse", "mae", "r2"], ascending=[True, True, False]).iloc[0].to_dict()
-
-        contains_rows = spark_rows[spark_rows["model_name"].fillna("").astype(str).str.lower().str.contains(preferred_name, regex=False)]
-        if not contains_rows.empty:
-            return contains_rows.sort_values(["rmse", "mae", "r2"], ascending=[True, True, False]).iloc[0].to_dict()
-
-    return spark_rows.sort_values(["rmse", "mae", "r2"], ascending=[True, True, False]).iloc[0].to_dict()
 
 
 def model_scope_for(metric_row, location_id):

@@ -1,4 +1,4 @@
-import { BarChart3, Gauge, AlertCircle, LogOut, Settings, Thermometer, MessageCircle } from 'lucide-react'
+import { BarChart3, Gauge, AlertCircle, LogOut, Settings, Thermometer, MessageCircle, BrainCircuit } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useDevices } from '../context/DeviceContext'
 
@@ -10,11 +10,13 @@ export default function Sidebar({ activeMenu, setActiveMenu, health }) {
     ? [
         { id: 'dashboard', label: 'Cloud Overview', icon: Gauge },
         { id: 'iot-devices', label: 'IoT Devices', icon: Thermometer },
+        { id: 'ml-report', label: 'Model Report', icon: BrainCircuit },
         { id: 'support-chat', label: 'Customer Chat', icon: MessageCircle },
       ]
     : [
         { id: 'dashboard', label: 'My Dashboard', icon: Gauge },
         { id: 'iot-devices', label: 'IoT Devices', icon: Thermometer },
+        { id: 'ml-report', label: 'Model Report', icon: BrainCircuit },
         { id: 'alerts', label: 'Alerts', icon: AlertCircle },
         { id: 'support-chat', label: 'Support Chat', icon: MessageCircle },
       ]

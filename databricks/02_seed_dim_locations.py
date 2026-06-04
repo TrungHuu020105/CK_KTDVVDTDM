@@ -1,5 +1,3 @@
-# Databricks notebook source
-
 """Seed representative Vietnam province/location rows for Meteostat ingest.
 
 This script adds representative Vietnam province/city locations to:
@@ -13,20 +11,12 @@ Use LOCATION_SET=current_34 for the current 34 provincial-level units, or
 LOCATION_SET=legacy_63 for the previous 63 province/city set.
 """
 
-# COMMAND ----------
-
-# Imports
-
 import os
 from pathlib import Path
 
 from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
-
-# COMMAND ----------
-
-# Constants and configuration
 
 DEFAULTS = {
     "DATABRICKS_CATALOG": "dtdm",
@@ -35,10 +25,6 @@ DEFAULTS = {
     "UPDATE_ACTIVE_PROVINCES": "true",
 }
 
-
-# COMMAND ----------
-
-# Environment and widget helpers
 
 def load_local_env():
     candidates = []
@@ -122,10 +108,6 @@ def ensure_namespace():
         )
 
 
-# COMMAND ----------
-
-# Location seed data
-
 LOCATIONS = [
     {"province_id": "hanoi", "province_name": "Ha Noi", "location_id": "loc_hanoi", "location_name": "Ha Noi", "latitude": 21.0278, "longitude": 105.8342, "altitude": 10.0, "region": "North"},
     {"province_id": "hcm", "province_name": "Ho Chi Minh City", "location_id": "loc_hcm", "location_name": "Ho Chi Minh City", "latitude": 10.8231, "longitude": 106.6297, "altitude": 5.0, "region": "South"},
@@ -156,14 +138,6 @@ LOCATIONS = [
     {"province_id": "hatinh", "province_name": "Ha Tinh", "location_id": "loc_hatinh", "location_name": "Ha Tinh", "latitude": 18.3428, "longitude": 105.9057, "altitude": 5.0, "region": "Central"},
     {"province_id": "haiduong", "province_name": "Hai Duong", "location_id": "loc_haiduong", "location_name": "Hai Duong", "latitude": 20.9373, "longitude": 106.3146, "altitude": 5.0, "region": "North"},
     {"province_id": "haugiang", "province_name": "Hau Giang", "location_id": "loc_haugiang", "location_name": "Vi Thanh", "latitude": 9.7845, "longitude": 105.4701, "altitude": 2.0, "region": "South"},
-]
-
-
-# COMMAND ----------
-
-# More legacy location seed data
-
-LOCATIONS.extend([
     {"province_id": "hoabinh", "province_name": "Hoa Binh", "location_id": "loc_hoabinh", "location_name": "Hoa Binh", "latitude": 20.8172, "longitude": 105.3376, "altitude": 25.0, "region": "North"},
     {"province_id": "hungyen", "province_name": "Hung Yen", "location_id": "loc_hungyen", "location_name": "Hung Yen", "latitude": 20.6464, "longitude": 106.0511, "altitude": 5.0, "region": "North"},
     {"province_id": "khanhhoa", "province_name": "Khanh Hoa", "location_id": "loc_khanhhoa", "location_name": "Nha Trang", "latitude": 12.2388, "longitude": 109.1967, "altitude": 5.0, "region": "South Central"},
@@ -191,14 +165,6 @@ LOCATIONS.extend([
     {"province_id": "thaibinh", "province_name": "Thai Binh", "location_id": "loc_thaibinh", "location_name": "Thai Binh", "latitude": 20.4463, "longitude": 106.3366, "altitude": 3.0, "region": "North"},
     {"province_id": "thainguyen", "province_name": "Thai Nguyen", "location_id": "loc_thainguyen", "location_name": "Thai Nguyen", "latitude": 21.5942, "longitude": 105.8482, "altitude": 40.0, "region": "North"},
     {"province_id": "thanhhoa", "province_name": "Thanh Hoa", "location_id": "loc_thanhhoa", "location_name": "Thanh Hoa", "latitude": 19.8067, "longitude": 105.7852, "altitude": 5.0, "region": "Central"},
-])
-
-
-# COMMAND ----------
-
-# Final legacy location seed data
-
-LOCATIONS.extend([
     {"province_id": "thuathienhue", "province_name": "Thua Thien Hue", "location_id": "loc_hue", "location_name": "Hue", "latitude": 16.4637, "longitude": 107.5909, "altitude": 5.0, "region": "Central"},
     {"province_id": "tiengiang", "province_name": "Tien Giang", "location_id": "loc_tiengiang", "location_name": "My Tho", "latitude": 10.3600, "longitude": 106.3600, "altitude": 2.0, "region": "South"},
     {"province_id": "travinh", "province_name": "Tra Vinh", "location_id": "loc_travinh", "location_name": "Tra Vinh", "latitude": 9.9347, "longitude": 106.3453, "altitude": 2.0, "region": "South"},
@@ -206,15 +172,11 @@ LOCATIONS.extend([
     {"province_id": "vinhlong", "province_name": "Vinh Long", "location_id": "loc_vinhlong", "location_name": "Vinh Long", "latitude": 10.2537, "longitude": 105.9722, "altitude": 2.0, "region": "South"},
     {"province_id": "vinhphuc", "province_name": "Vinh Phuc", "location_id": "loc_vinhphuc", "location_name": "Vinh Yen", "latitude": 21.3089, "longitude": 105.6049, "altitude": 20.0, "region": "North"},
     {"province_id": "yenbai", "province_name": "Yen Bai", "location_id": "loc_yenbai", "location_name": "Yen Bai", "latitude": 21.7050, "longitude": 104.8750, "altitude": 40.0, "region": "North"},
-])
+]
 
 
 LEGACY_63_LOCATIONS = LOCATIONS
 
-
-# COMMAND ----------
-
-# Current 34 province-level locations
 
 CURRENT_34_LOCATIONS = [
     {"province_id": "hanoi", "province_name": "Ha Noi", "location_id": "loc34_hanoi", "location_name": "Ha Noi", "latitude": 21.0278, "longitude": 105.8342, "altitude": 10.0, "region": "North"},
@@ -253,10 +215,6 @@ CURRENT_34_LOCATIONS = [
     {"province_id": "sonla", "province_name": "Son La", "location_id": "loc34_sonla", "location_name": "Son La", "latitude": 21.3270, "longitude": 103.9141, "altitude": 600.0, "region": "North"},
 ]
 
-
-# COMMAND ----------
-
-# Data preparation and table writes
 
 def selected_locations():
     location_set = setting("LOCATION_SET").strip().lower()
@@ -335,10 +293,6 @@ def merge_table(source_df, target_table, key_column):
     )
 
 
-# COMMAND ----------
-
-# Main execution
-
 def main():
     create_widgets()
     ensure_namespace()
@@ -352,6 +306,5 @@ def main():
     print("Current dim_location count: " + str(location_count))
 
 
-# COMMAND ----------
-
-main()
+if __name__ == "__main__":
+    main()

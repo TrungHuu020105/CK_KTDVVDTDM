@@ -344,6 +344,259 @@ def _resolve_forecast_rows(sensor_id: str, limit: int, sensor_metadata: dict | N
         return []
 
 
+def _query_model_rows(query: str, params: tuple) -> list[dict]:
+    rows = _query_dicts(query, params)
+    normalized_rows: list[dict] = []
+    for row in rows:
+        normalized_rows.append(
+            {
+                "model_name": row.get("model_name"),
+                "model_type": row.get("model_type"),
+                "training_mode": row.get("training_mode"),
+                "model_scope": row.get("model_scope"),
+                "location_id": row.get("location_id"),
+                "location_name": row.get("location_name"),
+                "province_id": row.get("province_id"),
+                "location_count": row.get("location_count"),
+                "target_variable": row.get("target_variable") or row.get("metric_type") or row.get("target"),
+                "mae": row.get("mae"),
+                "rmse": row.get("rmse"),
+                "rse": row.get("rse"),
+                "mape": row.get("mape"),
+                "r2": row.get("r2"),
+                "forecast_horizon_hours": row.get("forecast_horizon_hours") or row.get("horizon_hours") or row.get("horizon"),
+                "input_window_hours": row.get("input_window_hours"),
+                "model_uri": row.get("model_uri"),
+                "mlflow_run_id": row.get("mlflow_run_id") or row.get("run_id"),
+                "train_rows": row.get("train_rows") or row.get("training_rows") or row.get("training_points"),
+                "test_rows": row.get("test_rows") or row.get("test_points"),
+                "is_best": row.get("is_best"),
+                "created_at": row.get("created_at"),
+                "rank_order": row.get("rank_order"),
+                "sensor_id": row.get("sensor_id"),
+            }
+        )
+    return normalized_rows
+
+
+def _resolve_location_reference_ids(context: dict) -> tuple[list[str], list[str]]:
+    location_table = _table_name("dim_location")
+    text_candidates = context.get("location_text_candidates") or []
+    slug_candidates = context.get("location_slug_candidates") or []
+    clauses: list[str] = []
+    params: list[str] = []
+
+    if text_candidates:
+        placeholders = ", ".join("?" for _ in text_candidates)
+        clauses.extend(
+            [
+                f"LOWER(COALESCE(location_id, '')) IN ({placeholders})",
+                f"LOWER(COALESCE(location_name, '')) IN ({placeholders})",
+                f"LOWER(COALESCE(province_id, '')) IN ({placeholders})",
+            ]
+        )
+        params.extend(text_candidates * 3)
+
+    if slug_candidates:
+        placeholders = ", ".join("?" for _ in slug_candidates)
+        clauses.extend(
+            [
+                f"REGEXP_REPLACE(LOWER(COALESCE(location_id, '')), '[^a-z0-9]', '') IN ({placeholders})",
+                f"REGEXP_REPLACE(LOWER(COALESCE(location_name, '')), '[^a-z0-9]', '') IN ({placeholders})",
+                f"REGEXP_REPLACE(LOWER(COALESCE(province_id, '')), '[^a-z0-9]', '') IN ({placeholders})",
+            ]
+        )
+        params.extend(slug_candidates * 3)
+
+    if not clauses:
+        return [], []
+
+    query = f"""
+        SELECT DISTINCT location_id, province_id
+        FROM {location_table}
+        WHERE {" OR ".join(clauses)}
+    """
+    try:
+        rows = _query_dicts(query, tuple(params))
+    except Exception:
+        return [], []
+
+    location_ids = _normalized_candidates(*(row.get("location_id") for row in rows))
+    province_ids = _normalized_candidates(*(row.get("province_id") for row in rows))
+    return location_ids, province_ids
+
+
+def _resolve_model_rows(sensor_id: str, limit: int, sensor_metadata: dict | None = None) -> list[dict]:
+    context = _sensor_context(sensor_id, sensor_metadata=sensor_metadata)
+    evaluation_table = _table_name(config.DATABRICKS_EVALUATION_TABLE)
+    leaderboard_table = _table_name("model_leaderboard")
+    location_table = _table_name("dim_location")
+
+    direct_candidates = context.get("direct_candidates") or []
+    location_ids, province_ids = _resolve_location_reference_ids(context)
+
+    attempts: list[tuple[str, tuple]] = []
+    direct_query: str | None = None
+
+    if direct_candidates:
+        placeholders = ", ".join("?" for _ in direct_candidates)
+        direct_query = f"""
+            SELECT
+              model_name,
+              model_type,
+              training_mode,
+              model_scope,
+              location_id,
+              CAST(NULL AS STRING) AS location_name,
+              CAST(NULL AS STRING) AS province_id,
+              CAST(NULL AS INT) AS location_count,
+              metric_type AS target_variable,
+              mae,
+              rmse,
+              rse,
+              mape,
+              r2,
+              CAST(NULL AS INT) AS forecast_horizon_hours,
+              CAST(NULL AS INT) AS input_window_hours,
+              model_uri,
+              mlflow_run_id,
+              training_rows AS train_rows,
+              test_rows AS test_rows,
+              is_best,
+              created_at,
+              CAST(NULL AS INT) AS rank_order,
+              sensor_id
+            FROM {evaluation_table}
+            WHERE LOWER(COALESCE(sensor_id, '')) IN ({placeholders})
+            ORDER BY metric_type ASC, is_best DESC, rmse ASC NULLS LAST, mae ASC NULLS LAST, created_at DESC
+            LIMIT ?
+        """
+        attempts.append((direct_query, tuple(direct_candidates) + (int(limit),)))
+
+    clauses: list[str] = []
+    params: list[str] = []
+
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        clauses.append(f"LOWER(COALESCE(ml.location_id, '')) IN ({placeholders})")
+        params.extend(location_ids)
+
+    if province_ids:
+        placeholders = ", ".join("?" for _ in province_ids)
+        clauses.append(f"LOWER(COALESCE(ml.province_id, '')) IN ({placeholders})")
+        params.extend(province_ids)
+
+    if clauses:
+        location_query = f"""
+            SELECT
+              ml.model_name,
+              ml.model_type,
+              ml.training_mode,
+              ml.model_scope,
+              ml.location_id,
+              dl.location_name,
+              ml.province_id,
+              ml.location_count,
+              ml.target_variable,
+              ml.mae,
+              ml.rmse,
+              ml.rse,
+              ml.mape,
+              ml.r2,
+              ml.forecast_horizon_hours,
+              ml.input_window_hours,
+              ml.model_uri,
+              ml.mlflow_run_id,
+              ml.train_rows,
+              ml.test_rows,
+              ml.is_best,
+              ml.created_at,
+              CAST(NULL AS INT) AS rank_order,
+              CAST(NULL AS STRING) AS sensor_id
+            FROM {leaderboard_table} ml
+            LEFT JOIN {location_table} dl ON dl.location_id = ml.location_id
+            WHERE {" OR ".join(clauses)}
+            ORDER BY
+              ml.target_variable ASC,
+              ml.is_best DESC,
+              ml.rmse ASC NULLS LAST,
+              ml.mae ASC NULLS LAST,
+              ml.created_at DESC
+            LIMIT ?
+        """
+        attempts.append((location_query, tuple(params) + (int(limit),)))
+
+    for query, params in attempts:
+        try:
+            rows = _query_model_rows(query, params)
+            if rows:
+                if direct_query and query == direct_query:
+                    return rows
+                try:
+                    global_query = f"""
+                        SELECT
+                          ml.model_name,
+                          ml.model_type,
+                          ml.training_mode,
+                          ml.model_scope,
+                          ml.location_id,
+                          dl.location_name,
+                          ml.province_id,
+                          ml.location_count,
+                          ml.target_variable,
+                          ml.mae,
+                          ml.rmse,
+                          ml.rse,
+                          ml.mape,
+                          ml.r2,
+                          ml.forecast_horizon_hours,
+                          ml.input_window_hours,
+                          ml.model_uri,
+                          ml.mlflow_run_id,
+                          ml.train_rows,
+                          ml.test_rows,
+                          ml.is_best,
+                          ml.created_at,
+                          CAST(NULL AS INT) AS rank_order,
+                          CAST(NULL AS STRING) AS sensor_id
+                        FROM {leaderboard_table} ml
+                        LEFT JOIN {location_table} dl ON dl.location_id = ml.location_id
+                        WHERE LOWER(COALESCE(ml.training_mode, '')) = 'global'
+                        ORDER BY
+                          ml.target_variable ASC,
+                          ml.is_best DESC,
+                          ml.rmse ASC NULLS LAST,
+                          ml.mae ASC NULLS LAST,
+                          ml.created_at DESC
+                        LIMIT ?
+                    """
+                    global_rows = _query_model_rows(global_query, (max(0, int(limit) - len(rows)),))
+                except Exception:
+                    global_rows = []
+
+                deduped: list[dict] = []
+                seen_keys: set[tuple] = set()
+                for row in rows + global_rows:
+                    key = (
+                        row.get("target_variable"),
+                        row.get("model_name"),
+                        row.get("training_mode"),
+                        row.get("location_id"),
+                        row.get("created_at"),
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    deduped.append(row)
+                    if len(deduped) >= int(limit):
+                        break
+                return deduped
+        except Exception:
+            continue
+
+    return []
+
+
 class DatabricksService:
     @staticmethod
     def status() -> dict:
@@ -382,15 +635,14 @@ class DatabricksService:
         return payload
 
     @staticmethod
-    def fetch_model_leaderboard(sensor_id: str, limit: int = 50) -> dict:
+    def fetch_model_leaderboard(sensor_id: str, limit: int = 50, sensor_metadata: dict | None = None) -> dict:
         if not _is_configured():
             return {"enabled": False, "sensor_id": sensor_id, "models": []}
-        table = _table_name(config.DATABRICKS_EVALUATION_TABLE)
-        query = f"""
-            SELECT *
-            FROM {table}
-            WHERE sensor_id = ?
-            ORDER BY is_best DESC, target ASC, rmse ASC
-            LIMIT ?
-        """
-        return {"enabled": True, "sensor_id": sensor_id, "models": _query_dicts(query, (sensor_id, int(limit)))}
+        context = _sensor_context(sensor_id, sensor_metadata=sensor_metadata)
+        return {
+            "enabled": True,
+            "sensor_id": sensor_id,
+            "leaderboard_scope": "location",
+            "location_candidates": context.get("location_candidates") or [],
+            "models": _resolve_model_rows(sensor_id, int(limit), sensor_metadata=sensor_metadata),
+        }

@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 """Generate 168-hour forecasts for locations using best models selected by 09.
 
 Flow:

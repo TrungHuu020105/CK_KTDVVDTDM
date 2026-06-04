@@ -1,5 +1,3 @@
-# Databricks notebook source
-
 """Sync ESP32 temperature/humidity rows from PostgreSQL into Bronze Delta.
 
 Expected output table:
@@ -10,10 +8,6 @@ hourly Gold layer after cleaning/aggregation, and Meteostat remains the primary
 historical source until ESP32 has enough history.
 """
 
-# COMMAND ----------
-
-# Imports
-
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -22,10 +16,6 @@ from delta.tables import DeltaTable
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
-
-# COMMAND ----------
-
-# Constants and configuration
 
 DEFAULTS = {
     "DATABRICKS_CATALOG": "dtdm",
@@ -57,10 +47,6 @@ DEFAULTS = {
     "POSTGRES_HUMIDITY_COLUMN": "humidity",
 }
 
-
-# COMMAND ----------
-
-# Environment and widget helpers
 
 def load_local_env():
     candidates = []
@@ -167,10 +153,6 @@ def credentials():
     return user, password
 
 
-# COMMAND ----------
-
-# Catalog and source query helpers
-
 def fq_table(name):
     return f"{setting('DATABRICKS_CATALOG')}.{setting('DATABRICKS_SCHEMA')}.{name}"
 
@@ -234,10 +216,6 @@ def source_query():
     """
 
 
-# COMMAND ----------
-
-# Read and prepare Bronze rows
-
 def read_postgres():
     user, password = credentials()
     try:
@@ -275,10 +253,6 @@ def prepare_bronze(raw):
     window = Window.partitionBy("device_id", "event_ts").orderBy(F.col("ingest_time").desc())
     return prepared.withColumn("rn", F.row_number().over(window)).where("rn = 1").drop("rn")
 
-
-# COMMAND ----------
-
-# Bronze table writes
 
 def table_exists(table_name):
     return spark.catalog.tableExists(table_name)  # type: ignore[name-defined]
@@ -374,10 +348,6 @@ def merge_bronze(df, target_table):
     print(f"Upserted ESP32 Bronze rows into {target_table}.")
 
 
-# COMMAND ----------
-
-# Main execution
-
 def main():
     create_widgets()
     ensure_namespace()
@@ -386,6 +356,5 @@ def main():
     merge_bronze(bronze_df, target_table)
 
 
-# COMMAND ----------
-
-main()
+if __name__ == "__main__":
+    main()

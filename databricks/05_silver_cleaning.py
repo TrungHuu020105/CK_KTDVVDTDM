@@ -1,5 +1,3 @@
-# Databricks notebook source
-
 """Clean Bronze data and build Silver hourly joins.
 
 Outputs:
@@ -8,10 +6,6 @@ Outputs:
   silver_meteostat_cleaned
   silver_weather_joined
 """
-
-# COMMAND ----------
-
-# Imports
 
 import os
 from pathlib import Path
@@ -27,10 +21,6 @@ from pyspark.sql.types import (
 )
 
 
-# COMMAND ----------
-
-# Constants and configuration
-
 DEFAULTS = {
     "DATABRICKS_CATALOG": "dtdm",
     "DATABRICKS_SCHEMA": "metrics_app_streaming",
@@ -41,10 +31,6 @@ DEFAULTS = {
     "include_inactive_locations": "false",
 }
 
-
-# COMMAND ----------
-
-# Environment and widget helpers
 
 def load_local_env():
     candidates = []
@@ -118,10 +104,6 @@ def table_exists(name):
     return len(rows) > 0
 
 
-# COMMAND ----------
-
-# Shared Silver helpers
-
 def filter_active_meteostat_locations(df):
     location_set = setting_any("LOCATION_SET", "location_set").strip().lower()
     if location_set in ("current_34", "34", "current"):
@@ -161,10 +143,6 @@ def write_delta(df, table_name, partition_cols=None):
     spark.sql("DELETE FROM " + target_table)  # type: ignore[name-defined]
     df.write.format("delta").mode("append").saveAsTable(target_table)
 
-
-# COMMAND ----------
-
-# ESP32 cleaning
 
 def clean_esp32():
     schema = StructType(
@@ -221,10 +199,6 @@ def build_esp32_hourly(silver_esp32):
         .withColumn("created_at", F.current_timestamp())
     )
 
-
-# COMMAND ----------
-
-# Meteostat cleaning and joined Silver data
 
 def clean_meteostat():
     schema = StructType(
@@ -293,10 +267,6 @@ def build_joined(esp32_hourly, meteostat):
     )
 
 
-# COMMAND ----------
-
-# Main execution
-
 def main():
     create_widgets()
 
@@ -319,6 +289,5 @@ def main():
     print(f"Joined weather rows: {joined.count()}")
 
 
-# COMMAND ----------
-
-main()
+if __name__ == "__main__":
+    main()

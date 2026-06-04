@@ -179,7 +179,7 @@ WITH ranked AS (
     is_best,
     created_at,
     ROW_NUMBER() OVER (
-      PARTITION BY target_variable, COALESCE(training_mode, 'global'), COALESCE(location_id, 'global')
+      PARTITION BY target_variable
       ORDER BY rmse ASC NULLS LAST, mae ASC NULLS LAST, r2 DESC NULLS LAST, created_at DESC
     ) AS rank_order
   FROM dtdm.metrics_app_streaming.gold_model_metrics
@@ -207,3 +207,4 @@ SELECT
   COALESCE(is_best, rank_order = 1) AS is_best,
   created_at
 FROM ranked;
+
