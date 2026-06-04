@@ -9,9 +9,9 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from iot_backend.crud import create_alert
-from iot_backend.models import IoTDevice
+from iot_backend.models import Alert, IoTDevice
 from iot_backend.schemas import AlertCreate
-from iot_backend.services.alert_service import dispatch_alert_notifications
+from iot_backend.services.alert_service import build_alert_text, dispatch_alert_notifications
 
 ALERT_NOTIFY_COOLDOWN_SECONDS = 60
 _last_alert_notification_ts: dict[str, float] = {}
@@ -25,6 +25,13 @@ _UNIT_BY_METRIC = {
 
 
 def _pick_thresholds(device: IoTDevice, metric_type: str) -> tuple[float | None, float | None]:
+    if device.device_type == "temperature_humidity":
+        if metric_type == "temperature":
+            return device.temperature_min_threshold, device.temperature_max_threshold
+        if metric_type == "humidity":
+            return device.humidity_min_threshold, device.humidity_max_threshold
+        return None, None
+
     if metric_type == "temperature":
         min_value = device.temperature_min_threshold
         max_value = device.temperature_max_threshold
@@ -93,15 +100,23 @@ def check_and_trigger_metric_alert(
         return
 
     unit = _UNIT_BY_METRIC.get(metric_type, device.unit or "")
-    threshold_text = f"> {threshold}" if status == "critical" else f"< {threshold}"
-    message = (
-        "IoT Alert\n"
-        f"Device: {device.name or source}\n"
-        f"Metric: {metric_type}\n"
-        f"Current value: {current} {unit}\n"
-        f"Threshold: {threshold_text} (range: {min_threshold} - {max_threshold})\n"
-        f"Source: {origin}"
+    preview_alert = Alert(
+        metric_type=metric_type,
+        status=status,
+        current_value=current,
+        threshold=float(threshold),
+        message="",
+        source=source,
+        device_id=device.id,
+        device_name=device.name or source,
+        unit=unit,
+        min_threshold=float(min_threshold),
+        max_threshold=float(max_threshold),
+        created_at=metric_ts,
     )
+    message = build_alert_text(preview_alert, device)
+    if origin:
+        message = f"{message}\nOrigin: {origin}"
 
     alert = create_alert(
         db,

@@ -202,8 +202,8 @@ def create_sensor(payload: SensorCreateRequest, user: User = Depends(get_current
         action_hint=(payload.action_hint or "").strip() or None,
         is_active=True,
         alert_enabled=payload.alert_enabled,
-        min_threshold=payload.temperature_min_threshold,
-        max_threshold=payload.temperature_max_threshold,
+        min_threshold=None,
+        max_threshold=None,
         temperature_min_threshold=payload.temperature_min_threshold,
         temperature_max_threshold=payload.temperature_max_threshold,
         humidity_min_threshold=payload.humidity_min_threshold,
@@ -231,12 +231,12 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
         raise HTTPException(status_code=404, detail="Sensor not found")
     for field in payload.model_fields_set:
         setattr(device, field, getattr(payload, field))
-    if "temperature_min_threshold" in payload.model_fields_set or "temperature_max_threshold" in payload.model_fields_set:
-        device.min_threshold = device.temperature_min_threshold
-        device.max_threshold = device.temperature_max_threshold
-    elif "humidity_min_threshold" in payload.model_fields_set or "humidity_max_threshold" in payload.model_fields_set:
-        device.min_threshold = device.humidity_min_threshold
-        device.max_threshold = device.humidity_max_threshold
+    if device.device_type == "temperature_humidity":
+        # Sensor-level devices store temperature/humidity thresholds separately.
+        # Keeping generic min/max in sync would make one metric accidentally
+        # affect the other through legacy fallback alert logic.
+        device.min_threshold = None
+        device.max_threshold = None
     if device.source_type == "virtual_meteostat" and device.environment_type != "outdoor":
         raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
     db.commit()
