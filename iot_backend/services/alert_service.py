@@ -73,6 +73,32 @@ def _alert_time(alert: Alert) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _is_forecast_alert(alert: Alert) -> bool:
+    return str(getattr(alert, "alert_origin", "realtime") or "realtime").strip().lower() == "forecast"
+
+
+def _title(alert: Alert) -> str:
+    return "MetricsPulse Forecast Alert" if _is_forecast_alert(alert) else "MetricsPulse IoT Alert"
+
+
+def _value_label(alert: Alert) -> str:
+    return "Forecast value" if _is_forecast_alert(alert) else "Current value"
+
+
+def _forecast_time(alert: Alert) -> str | None:
+    value = getattr(alert, "forecast_timestamp", None)
+    if not value:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _forecast_generated_time(alert: Alert) -> str | None:
+    value = getattr(alert, "forecast_generated_at", None)
+    if not value:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def build_alert_text(alert: Alert, device: IoTDevice) -> str:
     device_label = _device_label(alert, device)
     source_label = str(alert.source or "Unknown")
@@ -82,17 +108,24 @@ def build_alert_text(alert: Alert, device: IoTDevice) -> str:
     allowed_range = _allowed_range_text(alert, device)
     status_label = _status_label(alert)
     alert_time = _alert_time(alert)
-    return (
-        "MetricsPulse IoT Alert\n"
+    lines = [
+        f"{_title(alert)}\n",
         f"Device: {device_label}\n"
         f"Source: {source_label}\n"
         f"Metric: {metric_label}\n"
-        f"Current value: {current_value}\n"
+        f"{_value_label(alert)}: {current_value}\n"
         f"Threshold trigger: {threshold_text}\n"
         f"Allowed range: {allowed_range}\n"
         f"Status: {status_label}\n"
-        f"Time: {alert_time}"
-    )
+        f"Time: {alert_time}",
+    ]
+    forecast_time = _forecast_time(alert)
+    if forecast_time:
+        lines.append(f"\nForecast time: {forecast_time}")
+    forecast_generated_time = _forecast_generated_time(alert)
+    if forecast_generated_time:
+        lines.append(f"\nForecast generated at: {forecast_generated_time}")
+    return "".join(lines)
 
 
 def _build_telegram_message(alert: Alert, device: IoTDevice) -> str:
@@ -104,17 +137,24 @@ def _build_telegram_message(alert: Alert, device: IoTDevice) -> str:
     allowed_range = _allowed_range_text(alert, device, html=True)
     status_label = escape(_status_label(alert))
     alert_time = escape(_alert_time(alert))
-    return (
-        "<b>MetricsPulse IoT Alert</b>\n"
+    message = (
+        f"<b>{escape(_title(alert))}</b>\n"
         f"<b>Device:</b> {device_label}\n"
         f"<b>Source:</b> {source_label}\n"
         f"<b>Metric:</b> {metric_label}\n"
-        f"<b>Current value:</b> {current_value}\n"
+        f"<b>{escape(_value_label(alert))}:</b> {current_value}\n"
         f"<b>Threshold trigger:</b> {threshold_text}\n"
         f"<b>Allowed range:</b> {allowed_range}\n"
         f"<b>Status:</b> {status_label}\n"
         f"<b>Time:</b> {alert_time}"
     )
+    forecast_time = _forecast_time(alert)
+    if forecast_time:
+        message += f"\n<b>Forecast time:</b> {escape(forecast_time)}"
+    forecast_generated_time = _forecast_generated_time(alert)
+    if forecast_generated_time:
+        message += f"\n<b>Forecast generated at:</b> {escape(forecast_generated_time)}"
+    return message
 
 
 def _build_email_html(alert: Alert, device: IoTDevice) -> str:
@@ -126,25 +166,34 @@ def _build_email_html(alert: Alert, device: IoTDevice) -> str:
     allowed_range = _allowed_range_text(alert, device, html=True)
     status_label = escape(_status_label(alert))
     alert_time = escape(_alert_time(alert))
+    forecast_time = _forecast_time(alert)
+    forecast_generated_time = _forecast_generated_time(alert)
+    extra_html = ""
+    if forecast_time:
+        extra_html += f"<p><b>Forecast time:</b> {escape(forecast_time)}</p>"
+    if forecast_generated_time:
+        extra_html += f"<p><b>Forecast generated at:</b> {escape(forecast_generated_time)}</p>"
     return f"""
     <html>
       <body>
-        <h2>MetricsPulse IoT Alert</h2>
+        <h2>{escape(_title(alert))}</h2>
         <p><b>Device:</b> {device_label}</p>
         <p><b>Source:</b> {source_label}</p>
         <p><b>Metric:</b> {metric_label}</p>
-        <p><b>Current value:</b> {current_value}</p>
+        <p><b>{escape(_value_label(alert))}:</b> {current_value}</p>
         <p><b>Threshold trigger:</b> {threshold_text}</p>
         <p><b>Allowed range:</b> {allowed_range}</p>
         <p><b>Status:</b> {status_label}</p>
         <p><b>Time:</b> {alert_time}</p>
+        {extra_html}
       </body>
     </html>
     """
 
 
 def _build_email_subject(alert: Alert, device: IoTDevice) -> str:
-    return f"[MetricsPulse Alert] {_metric_label(alert.metric_type)} out of range on {_device_label(alert, device)}"
+    prefix = "Forecast" if _is_forecast_alert(alert) else "Alert"
+    return f"[MetricsPulse {prefix}] {_metric_label(alert.metric_type)} out of range on {_device_label(alert, device)}"
 
 
 async def dispatch_alert_notifications(alert_id: int):

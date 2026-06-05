@@ -42,6 +42,9 @@ class Alert(Base):
     unit = Column(String(50), nullable=True)
     min_threshold = Column(Float, nullable=True)
     max_threshold = Column(Float, nullable=True)
+    alert_origin = Column(String(30), nullable=False, default="realtime", index=True)
+    forecast_timestamp = Column(DateTime, nullable=True, index=True)
+    forecast_generated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now, index=True, nullable=False)
     resolved_at = Column(DateTime, nullable=True)  # When alert was resolved (if applicable)
 

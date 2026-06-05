@@ -230,6 +230,9 @@ def create_alert(db: Session, alert: AlertCreate) -> Alert:
         unit=alert.unit,
         min_threshold=alert.min_threshold,
         max_threshold=alert.max_threshold,
+        alert_origin=alert.alert_origin,
+        forecast_timestamp=alert.forecast_timestamp,
+        forecast_generated_at=alert.forecast_generated_at,
         created_at=alert.created_at if alert.created_at else datetime.now(),
     )
     db.add(db_alert)

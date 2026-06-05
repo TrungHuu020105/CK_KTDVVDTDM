@@ -122,6 +122,9 @@ class AlertCreate(BaseModel):
     unit: Optional[str] = None
     min_threshold: Optional[float] = None
     max_threshold: Optional[float] = None
+    alert_origin: str = Field(default="realtime", description="Alert origin: realtime or forecast")
+    forecast_timestamp: Optional[datetime] = Field(default=None, description="Forecast timestamp that is predicted to breach threshold")
+    forecast_generated_at: Optional[datetime] = Field(default=None, description="When the forecast row was generated")
     created_at: Optional[datetime] = Field(default=None, description="Alert timestamp")
 
     @validator('metric_type')
@@ -140,6 +143,12 @@ class AlertCreate(BaseModel):
             raise ValueError("status must be 'warning', 'critical', or 'OUT_OF_RANGE'")
         return v
 
+    @validator('alert_origin')
+    def validate_alert_origin(cls, v):
+        if v not in {"realtime", "forecast"}:
+            raise ValueError("alert_origin must be either 'realtime' or 'forecast'")
+        return v
+
 
 class AlertResponse(BaseModel):
     """Schema for alert response"""
@@ -155,6 +164,9 @@ class AlertResponse(BaseModel):
     unit: Optional[str] = None
     min_threshold: Optional[float] = None
     max_threshold: Optional[float] = None
+    alert_origin: str = "realtime"
+    forecast_timestamp: Optional[datetime] = None
+    forecast_generated_at: Optional[datetime] = None
     created_at: datetime
     resolved_at: Optional[datetime] = None
 

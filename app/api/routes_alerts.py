@@ -55,6 +55,16 @@ async def create_alert(
     )
 
 
+@router.post("/alerts/forecast/run")
+async def run_forecast_alert_scan(request: Request, current_user=Depends(get_current_user)):
+    _ = current_user
+    return proxy_iot_backend(
+        "POST",
+        "/api/alerts/forecast/run",
+        bearer_token=extract_bearer_token(request),
+    )
+
+
 @router.get("/alerts", response_model=AlertListResponse)
 async def get_alerts(
     request: Request,

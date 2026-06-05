@@ -119,6 +119,9 @@ def _ensure_alert_required_columns():
         "unit": "VARCHAR(50)",
         "min_threshold": "FLOAT",
         "max_threshold": "FLOAT",
+        "alert_origin": "VARCHAR(30) DEFAULT 'realtime'",
+        "forecast_timestamp": "TIMESTAMP",
+        "forecast_generated_at": "TIMESTAMP",
     }
 
     with engine.begin() as conn:

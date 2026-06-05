@@ -12,6 +12,7 @@ from iot_backend.schemas import (
 from iot_backend import crud
 from iot_backend.api.routes_auth import get_current_user
 from iot_backend.services.ai_explanation_service import explain_alert_with_gemini
+from iot_backend.services.forecast_alert_service import dispatch_created_forecast_alerts, run_forecast_alert_scan
 from iot_backend.services.weather_service import get_weather_for_timestamp
 
 router = APIRouter(prefix="/api", tags=["alerts"])
@@ -69,6 +70,19 @@ async def create_alert(
     """
     db_alert = crud.create_alert(db, alert)
     return db_alert
+
+
+@router.post("/alerts/forecast/run")
+async def run_forecast_alert_scan_now(
+    current_user: User = Depends(get_current_user),
+):
+    result = run_forecast_alert_scan(
+        user_id=None if current_user.role == "admin" else current_user.id,
+        is_admin=current_user.role == "admin",
+        trigger="manual",
+    )
+    await dispatch_created_forecast_alerts(result.get("created_alert_ids") or [])
+    return result
 
 
 @router.get("/alerts", response_model=AlertListResponse)

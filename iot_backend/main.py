@@ -23,12 +23,19 @@ from iot_backend.api.routes_websocket import manager, save_iot_metric_to_db
 from iot_backend import mqtt_service
 from iot_backend.database import SessionLocal
 from iot_backend.state import runtime_state
+from iot_backend.services.forecast_alert_service import (
+    FORECAST_SCAN_INTERVAL_SECONDS,
+    dispatch_created_forecast_alerts,
+    run_forecast_alert_scan,
+)
 from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
 from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
 
 
 MAIN_LOOP = None
 VIETNAM_TZ = timezone(timedelta(hours=7))
+FORECAST_ALERT_TASK = None
+FORECAST_ALERT_STOP = None
 
 app = FastAPI(
     title="IoT Backend Service",
@@ -85,7 +92,7 @@ async def root():
 @app.on_event("startup")
 async def startup_event():
     """Initialize MQTT ingest for new ESP32 flow."""
-    global MAIN_LOOP
+    global MAIN_LOOP, FORECAST_ALERT_TASK, FORECAST_ALERT_STOP
     await _init_db_with_retry()
     MAIN_LOOP = asyncio.get_running_loop()
     try:
@@ -93,12 +100,49 @@ async def startup_event():
         print("[STARTUP] MQTT service started")
     except Exception as exc:
         print(f"[STARTUP] Failed to start MQTT service: {exc}")
+    FORECAST_ALERT_STOP = asyncio.Event()
+    FORECAST_ALERT_TASK = asyncio.create_task(_forecast_alert_scheduler())
+    print(f"[STARTUP] Forecast alert scheduler started ({FORECAST_SCAN_INTERVAL_SECONDS}s interval)")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global FORECAST_ALERT_TASK, FORECAST_ALERT_STOP
+    if FORECAST_ALERT_STOP is not None:
+        FORECAST_ALERT_STOP.set()
+    if FORECAST_ALERT_TASK is not None:
+        try:
+            await FORECAST_ALERT_TASK
+        except Exception:
+            pass
     mqtt_service.stop_mqtt()
     engine.dispose()
+
+
+async def _forecast_alert_scheduler():
+    while FORECAST_ALERT_STOP is not None and not FORECAST_ALERT_STOP.is_set():
+        try:
+            result = await asyncio.to_thread(
+                run_forecast_alert_scan,
+                user_id=None,
+                is_admin=True,
+                trigger="scheduler",
+            )
+            await dispatch_created_forecast_alerts(result.get("created_alert_ids") or [])
+            print(
+                "[FORECAST ALERT] scan complete "
+                f"devices={result.get('scanned_devices', 0)} "
+                f"created={result.get('created_alert_count', 0)} "
+                f"duplicates={result.get('duplicate_count', 0)} "
+                f"errors={result.get('error_count', 0)}"
+            )
+        except Exception as exc:
+            print(f"[FORECAST ALERT] scheduler error: {type(exc).__name__}: {exc}")
+
+        try:
+            await asyncio.wait_for(FORECAST_ALERT_STOP.wait(), timeout=FORECAST_SCAN_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
 
 
 def handle_mqtt_reading(reading: dict):

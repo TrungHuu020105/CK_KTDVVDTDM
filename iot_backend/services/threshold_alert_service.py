@@ -132,6 +132,7 @@ def check_and_trigger_metric_alert(
             unit=unit,
             min_threshold=float(min_threshold),
             max_threshold=float(max_threshold),
+            alert_origin="realtime",
             created_at=metric_ts,
         ),
     )
