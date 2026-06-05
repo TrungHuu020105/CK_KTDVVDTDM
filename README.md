@@ -169,9 +169,9 @@ docker compose up --build
 
 ### 3. URL sau khi chay
 
-- Frontend: `http://localhost:3000`
-- App backend: `http://localhost:8000`
-- IoT backend: `http://localhost:8100`
+- Frontend: `http://<VPS-IP>:2026`
+- App backend: khong public ra ngoai
+- IoT backend: khong public ra ngoai
 
 ### 4. Ghi chu quan trong
 
@@ -180,6 +180,7 @@ docker compose up --build
 - `DATABASE_URL` khong can hardcode trong compose nua; app va iot_backend se tu build URL tu `app/.env` va `iot_backend/.env`, nen van dung PostgreSQL VPS hien co.
 - `iot_backend` van co the khoi dong duoc neu MQTT broker chua san sang, nhung chuc nang realtime ingest se khong co du lieu.
 - Neu ban muon dung broker tai may host tren Docker Desktop Windows, `MQTT_HOST=host.docker.internal` thuong la dung.
+- Chi co port `2026` cua frontend duoc publish ra ngoai VPS; app backend va iot_backend chi nam trong Docker network noi bo.
 
 ## Diem nhan bao cao
 

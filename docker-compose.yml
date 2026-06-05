@@ -9,8 +9,6 @@ services:
       - ./iot_backend/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "8100:8100"
 
   app:
     build:
@@ -27,8 +25,6 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       IOT_BACKEND_URL: http://iot_backend:8100
-    ports:
-      - "8000:8000"
 
   frontend:
     build:
@@ -41,4 +37,4 @@ services:
     depends_on:
       - app
     ports:
-      - "3000:3000"
+      - "2026:2026"
