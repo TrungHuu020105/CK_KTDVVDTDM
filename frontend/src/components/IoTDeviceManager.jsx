@@ -31,6 +31,16 @@ const fmt = (value, suffix = '') => value === null || value === undefined ? '--'
 const onlyTime = (value) => value ? formatVNTime(value).split(' ').pop() : '--'
 const LATEST_REFRESH_MS = 3000
 const HISTORY_REFRESH_MS = 15000
+const noCacheConfig = (params = {}) => ({
+  params: {
+    ...params,
+    _ts: Date.now(),
+  },
+  headers: {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  },
+})
 const toNumberOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
@@ -117,6 +127,9 @@ export default function IoTDeviceManager() {
   const [aiSensor, setAiSensor] = useState(null)
   const [modalSaving, setModalSaving] = useState(false)
   const wsRef = useRef(null)
+  const selectedSensorIdRef = useRef(null)
+  const selectedSensorRef = useRef(null)
+  const loadHistoryRef = useRef(null)
 
   const selectedSensorId = getSensorId(selectedSensor)
 
@@ -130,13 +143,19 @@ export default function IoTDeviceManager() {
     const pairs = await Promise.all(sensorList.map(async (sensor) => {
       const sensorId = getSensorId(sensor)
       try {
-        const res = await api.get(`/api/sensors/${sensorId}/latest`)
+        const res = await api.get(`/api/sensors/${sensorId}/latest`, noCacheConfig())
         return [sensorId, res.data]
       } catch {
-        return [sensorId, sensor.latest_reading || null]
+        return [sensorId, null]
       }
     }))
-    setLatestMap((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))
+    setLatestMap((prev) => {
+      const next = { ...prev }
+      for (const [sensorId, reading] of pairs) {
+        if (reading) next[sensorId] = reading
+      }
+      return next
+    })
   }
 
   const loadHistory = async (sensor, silent = true) => {
@@ -144,7 +163,7 @@ export default function IoTDeviceManager() {
     if (!silent) setDetailLoading(true)
     const sensorId = getSensorId(sensor)
     try {
-      const historyRes = await api.get(`/api/sensors/${sensorId}/history`, { params: { minutes: 120 } }).catch(() => ({ data: { readings: [] } }))
+      const historyRes = await api.get(`/api/sensors/${sensorId}/history`, noCacheConfig({ minutes: 120 })).catch(() => ({ data: { readings: [] } }))
       setHistory(historyRes.data?.readings || [])
     } finally {
       if (!silent) setDetailLoading(false)
@@ -155,6 +174,12 @@ export default function IoTDeviceManager() {
     if (!sensor) return
     await loadHistory(sensor, silent)
   }
+
+  useEffect(() => {
+    selectedSensorIdRef.current = selectedSensorId
+    selectedSensorRef.current = selectedSensor
+    loadHistoryRef.current = loadHistory
+  }, [selectedSensorId, selectedSensor, loadHistory])
 
   useEffect(() => {
     loadLatest()
@@ -169,6 +194,18 @@ export default function IoTDeviceManager() {
   }, [sensors])
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      loadLatest()
+      if (selectedSensorRef.current) {
+        loadHistoryRef.current?.(selectedSensorRef.current, true)
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [sensors])
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'hidden' || !selectedSensor) return
       loadHistory(selectedSensor, true)
@@ -177,6 +214,8 @@ export default function IoTDeviceManager() {
   }, [selectedSensor])
 
   useEffect(() => {
+    let shouldReconnect = true
+
     const connect = () => {
       const useSameOriginApi = String(import.meta.env.VITE_USE_SAME_ORIGIN_API || 'false').toLowerCase() === 'true'
       const coreServerUrl = import.meta.env.VITE_CORE_SERVER_IP || import.meta.env.VITE_SERVER_IP || 'localhost'
@@ -191,7 +230,9 @@ export default function IoTDeviceManager() {
           const msg = JSON.parse(event.data)
           if (msg.type === 'sensor_reading' && msg.sensor_id) {
             setLatestMap((prev) => ({ ...prev, [msg.sensor_id]: { ...prev[msg.sensor_id], ...msg, timestamp: msg.timestamp || msg.event_ts } }))
-            if (selectedSensorId === msg.sensor_id) loadHistory(selectedSensor, true)
+            if (selectedSensorIdRef.current === msg.sensor_id) {
+              loadHistoryRef.current?.(selectedSensorRef.current, true)
+            }
           }
           if (msg.type === 'iot_metric') {
             setLatestMap((prev) => {
@@ -203,11 +244,16 @@ export default function IoTDeviceManager() {
           console.error('Failed to parse websocket payload:', err)
         }
       }
-      wsRef.current.onclose = () => window.setTimeout(connect, 3000)
+      wsRef.current.onclose = () => {
+        if (shouldReconnect) window.setTimeout(connect, 3000)
+      }
     }
     connect()
-    return () => wsRef.current?.close()
-  }, [selectedSensorId])
+    return () => {
+      shouldReconnect = false
+      wsRef.current?.close()
+    }
+  }, [])
 
   const handleAdd = async (payload) => {
     setAdding(true)
@@ -256,7 +302,10 @@ export default function IoTDeviceManager() {
     if (!alertSensor) return
     setModalSaving(true)
     try {
-      await applySensorPatch(alertSensor, payload, 'Đã lưu ngưỡng cảnh báo')
+      const updated = await applySensorPatch(alertSensor, payload, 'Đã lưu ngưỡng cảnh báo')
+      if (updated?.threshold_sync_status === 'db_only') {
+        showToast('Ngưỡng đã lưu nhưng chưa sync được xuống thiết bị qua MQTT.', 'warning')
+      }
       setAlertSensor(null)
     } catch (err) {
       showToast(err.response?.data?.detail || 'Không lưu được ngưỡng cảnh báo', 'error')

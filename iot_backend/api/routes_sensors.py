@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from iot_backend import mqtt_service
 from iot_backend.api.routes_auth import get_current_user
 from iot_backend.database import get_db
 from iot_backend.models import IoTDevice, SensorReading, User
@@ -70,6 +71,30 @@ def _latest_for_sensor(db: Session, sensor_id: str) -> SensorReading | None:
         .order_by(SensorReading.event_ts.desc(), SensorReading.id.desc())
         .first()
     )
+
+
+def _publish_threshold_configs_for_sensor(device: IoTDevice) -> tuple[bool, dict[str, bool]]:
+    results = {
+        "temperature": mqtt_service.publish_threshold_config(
+            sensor_id=device.source,
+            metric_type="temperature",
+            min_threshold=device.temperature_min_threshold,
+            max_threshold=device.temperature_max_threshold,
+            alert_enabled=bool(device.alert_enabled),
+            unit="C",
+            device_id=device.id,
+        ),
+        "humidity": mqtt_service.publish_threshold_config(
+            sensor_id=device.source,
+            metric_type="humidity",
+            min_threshold=device.humidity_min_threshold,
+            max_threshold=device.humidity_max_threshold,
+            alert_enabled=bool(device.alert_enabled),
+            unit="%",
+            device_id=device.id,
+        ),
+    }
+    return all(results.values()), results
 
 
 def _sensor_device_or_404(db: Session, sensor_id: str, user: User) -> IoTDevice:
@@ -224,7 +249,12 @@ def create_sensor(payload: SensorCreateRequest, user: User = Depends(get_current
     db.add(device)
     db.commit()
     db.refresh(device)
-    return _serialize_device(device)
+    mqtt_ok, mqtt_results = _publish_threshold_configs_for_sensor(device)
+    response = _serialize_device(device)
+    response["threshold_config_published"] = mqtt_ok
+    response["threshold_config_results"] = mqtt_results
+    response["threshold_sync_status"] = "published" if mqtt_ok else "db_only"
+    return response
 
 
 @router.get("/{sensor_id}")
@@ -238,6 +268,14 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
     device = _sensor_device_or_404(db, sensor_id, user)
     if "source_type" in payload.model_fields_set and payload.source_type not in {None, "physical_iot"}:
         raise HTTPException(status_code=400, detail="Virtual sensors have been removed from this system.")
+    threshold_fields = {
+        "alert_enabled",
+        "temperature_min_threshold",
+        "temperature_max_threshold",
+        "humidity_min_threshold",
+        "humidity_max_threshold",
+    }
+    thresholds_touched = bool(payload.model_fields_set & threshold_fields)
     for field in payload.model_fields_set:
         setattr(device, field, getattr(payload, field))
     if device.device_type == "temperature_humidity":
@@ -248,7 +286,13 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
         device.max_threshold = None
     db.commit()
     db.refresh(device)
-    return _serialize_device(device, _latest_for_sensor(db, sensor_id))
+    response = _serialize_device(device, _latest_for_sensor(db, sensor_id))
+    if thresholds_touched:
+        mqtt_ok, mqtt_results = _publish_threshold_configs_for_sensor(device)
+        response["threshold_config_published"] = mqtt_ok
+        response["threshold_config_results"] = mqtt_results
+        response["threshold_sync_status"] = "published" if mqtt_ok else "db_only"
+    return response
 
 
 @router.delete("/{sensor_id}")

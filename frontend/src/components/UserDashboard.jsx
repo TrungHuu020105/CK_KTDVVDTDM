@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, Download, Plus, Server, Thermometer, TrendingUp } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useDevices } from '../context/DeviceContext'
@@ -10,8 +10,18 @@ const today = () => new Date().toISOString().slice(0, 10)
 const fmt = (value, digits = 1) => value === null || value === undefined || Number.isNaN(Number(value)) ? '--' : Number(value).toFixed(digits)
 const onlyTime = (value) => value ? formatVNTime(value).slice(0, 5) : '--'
 const LATEST_REFRESH_MS = 3000
-const HISTORY_REFRESH_MS = 15000
+const HISTORY_REFRESH_MS = 5000
 const FORECAST_REFRESH_MS = 5 * 60 * 1000
+const noCacheConfig = (params = {}) => ({
+  params: {
+    ...params,
+    _ts: Date.now(),
+  },
+  headers: {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  },
+})
 
 const startOfDay = (value) => new Date(`${value}T00:00:00`)
 const endOfDay = (value) => new Date(`${value}T23:59:59`)
@@ -70,6 +80,9 @@ export default function UserDashboard() {
   const [toDate, setToDate] = useState(today())
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState(false)
+  const wsRef = useRef(null)
+  const activeSensorIdRef = useRef(null)
+  const loadHistoryRef = useRef(null)
 
   const activeSensorId = selectedSensorId || getSensorId(sensors?.[0])
   const activeSensor = sensors.find((sensor) => getSensorId(sensor) === activeSensorId)
@@ -80,20 +93,26 @@ export default function UserDashboard() {
     const pairs = await Promise.all(sensors.map(async (sensor) => {
       const sensorId = getSensorId(sensor)
       try {
-        const res = await api.get(`/api/sensors/${sensorId}/latest`)
+        const res = await api.get(`/api/sensors/${sensorId}/latest`, noCacheConfig())
         return [sensorId, res.data]
       } catch {
-        return [sensorId, sensor.latest_reading || null]
+        return [sensorId, null]
       }
     }))
-    setLatestMap((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))
+    setLatestMap((prev) => {
+      const next = { ...prev }
+      for (const [sensorId, reading] of pairs) {
+        if (reading) next[sensorId] = reading
+      }
+      return next
+    })
   }
 
   const loadHistory = async () => {
     if (!activeSensorId) return
     try {
       const minutes = Math.max(24 * 60, dayDiffInclusive(fromDate, toDate) * 24 * 60)
-      const historyRes = await api.get(`/api/sensors/${activeSensorId}/history`, { params: { minutes } }).catch(() => ({ data: { readings: [] } }))
+      const historyRes = await api.get(`/api/sensors/${activeSensorId}/history`, noCacheConfig({ minutes })).catch(() => ({ data: { readings: [] } }))
       setHistory(historyRes.data?.readings || [])
       setError('')
     } catch (err) {
@@ -117,6 +136,11 @@ export default function UserDashboard() {
   }
 
   useEffect(() => {
+    activeSensorIdRef.current = activeSensorId
+    loadHistoryRef.current = loadHistory
+  }, [activeSensorId, loadHistory])
+
+  useEffect(() => {
     if (sensors.length && !selectedSensorId) setSelectedSensorId(getSensorId(sensors[0]))
   }, [sensors, selectedSensorId, setSelectedSensorId])
 
@@ -137,12 +161,68 @@ export default function UserDashboard() {
   }, [sensors])
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      loadLatest()
+      loadHistoryRef.current?.()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [sensors])
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'hidden') return
       loadHistory()
     }, HISTORY_REFRESH_MS)
     return () => window.clearInterval(interval)
   }, [activeSensorId, fromDate, toDate])
+
+  useEffect(() => {
+    let shouldReconnect = true
+
+    const connect = () => {
+      const useSameOriginApi = String(import.meta.env.VITE_USE_SAME_ORIGIN_API || 'false').toLowerCase() === 'true'
+      const coreServerUrl = import.meta.env.VITE_CORE_SERVER_IP || import.meta.env.VITE_SERVER_IP || 'localhost'
+      const corePort = import.meta.env.VITE_CORE_SERVER_PORT || import.meta.env.VITE_SERVER_PORT || '8000'
+      const token = localStorage.getItem('access_token') || ''
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      const wsHost = useSameOriginApi ? window.location.host : `${coreServerUrl}:${corePort}`
+      const wsUrl = `${wsProtocol}://${wsHost}/api/ws/frontend_dashboard_${Date.now()}?token=${encodeURIComponent(token)}`
+      wsRef.current = new WebSocket(wsUrl)
+      wsRef.current.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'sensor_reading' && msg.sensor_id) {
+            setLatestMap((prev) => ({
+              ...prev,
+              [msg.sensor_id]: {
+                ...prev[msg.sensor_id],
+                ...msg,
+                timestamp: msg.timestamp || msg.event_ts,
+              },
+            }))
+            if (msg.sensor_id === activeSensorIdRef.current) {
+              loadHistoryRef.current?.()
+            }
+          }
+        } catch (err) {
+          console.error('Failed to parse dashboard websocket payload:', err)
+        }
+      }
+      wsRef.current.onerror = (err) => {
+        console.error('Dashboard websocket error:', err)
+      }
+      wsRef.current.onclose = () => {
+        if (shouldReconnect) window.setTimeout(connect, 3000)
+      }
+    }
+    connect()
+    return () => {
+      shouldReconnect = false
+      wsRef.current?.close()
+    }
+  }, [])
 
   useEffect(() => {
     const interval = window.setInterval(() => {

@@ -12,6 +12,12 @@ from app.services.databricks_service import DatabricksService
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
 
 
+def _set_no_cache_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+
 class SensorCreateRequest(BaseModel):
     name: str
     source: str
@@ -139,14 +145,16 @@ async def delete_sensor(sensor_id: str, request: Request, current_user=Depends(g
 
 
 @router.get("/{sensor_id}/latest")
-async def latest(sensor_id: str, request: Request, current_user=Depends(get_current_user)):
+async def latest(sensor_id: str, request: Request, response: Response, current_user=Depends(get_current_user)):
     _ = current_user
+    _set_no_cache_headers(response)
     return proxy_iot_backend("GET", f"/api/sensors/{sensor_id}/latest", bearer_token=extract_bearer_token(request))
 
 
 @router.get("/{sensor_id}/history")
-async def history(sensor_id: str, request: Request, minutes: int = 120, current_user=Depends(get_current_user)):
+async def history(sensor_id: str, request: Request, response: Response, minutes: int = 120, current_user=Depends(get_current_user)):
     _ = current_user
+    _set_no_cache_headers(response)
     return proxy_iot_backend("GET", f"/api/sensors/{sensor_id}/history?minutes={minutes}", bearer_token=extract_bearer_token(request))
 
 

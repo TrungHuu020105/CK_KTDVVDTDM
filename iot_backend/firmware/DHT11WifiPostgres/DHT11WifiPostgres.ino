@@ -60,11 +60,11 @@ const unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
 const unsigned long AUTO_CONTROL_INTERVAL_MS = 5000;
 const unsigned long RELAY_CHANGE_MIN_INTERVAL_MS = 10000;
 
-// ===== Auto mode hysteresis =====
-const float FAN_ON_TEMP = 50.0;
-const float FAN_OFF_TEMP = 15.0;
-const float FOG_ON_HUMIDITY = 40.0;
-const float FOG_OFF_HUMIDITY = 60.0;
+// ===== Auto mode single-threshold defaults =====
+// Fan uses the upper temperature threshold configured in the app.
+// Fog uses the lower humidity threshold configured in the app.
+const float FAN_TEMP_THRESHOLD = 50.0;
+const float FOG_HUMIDITY_THRESHOLD = 10.0;
 
 const bool RUN_RELAY_TEST_ON_BOOT = false;
 
@@ -1012,60 +1012,41 @@ void handleAutoMode(float temperature, float humidity) {
   lastAutoControlMs = now;
 
   bool changedAny = false;
-  float fanOnThreshold = FAN_ON_TEMP;
-  float fanOffThreshold = FAN_OFF_TEMP;
-  float fogOnThreshold = FOG_ON_HUMIDITY;
-  float fogOffThreshold = FOG_OFF_HUMIDITY;
+  float fanThreshold = FAN_TEMP_THRESHOLD;
+  float fogThreshold = FOG_HUMIDITY_THRESHOLD;
 
   if (temperatureThresholdConfig.alertEnabled) {
     if (temperatureThresholdConfig.hasMax) {
-      fanOnThreshold = temperatureThresholdConfig.maxValue;
-    }
-    if (temperatureThresholdConfig.hasMin) {
-      fanOffThreshold = temperatureThresholdConfig.minValue;
-    } else if (temperatureThresholdConfig.hasMax) {
-      fanOffThreshold = temperatureThresholdConfig.maxValue - 2.0;
+      fanThreshold = temperatureThresholdConfig.maxValue;
     }
   }
 
   if (humidityThresholdConfig.alertEnabled) {
     if (humidityThresholdConfig.hasMin) {
-      fogOnThreshold = humidityThresholdConfig.minValue;
-    }
-    if (humidityThresholdConfig.hasMax) {
-      fogOffThreshold = humidityThresholdConfig.maxValue;
-    } else if (humidityThresholdConfig.hasMin) {
-      fogOffThreshold = humidityThresholdConfig.minValue + 10.0;
+      fogThreshold = humidityThresholdConfig.minValue;
     }
   }
 
-  if (fanOffThreshold > fanOnThreshold) {
-    fanOffThreshold = fanOnThreshold;
-  }
-  if (fogOffThreshold < fogOnThreshold) {
-    fogOffThreshold = fogOnThreshold;
-  }
-
-  if (temperature >= fanOnThreshold && !fanState) {
-    Serial.print("[AUTO] Temp >= ");
-    Serial.print(fanOnThreshold, 1);
+  if (temperature > fanThreshold && !fanState) {
+    Serial.print("[AUTO] Temp > ");
+    Serial.print(fanThreshold, 1);
     Serial.println(" -> Fan ON");
     changedAny = setFan(true) || changedAny;
-  } else if (temperature <= fanOffThreshold && fanState) {
+  } else if (temperature <= fanThreshold && fanState) {
     Serial.print("[AUTO] Temp <= ");
-    Serial.print(fanOffThreshold, 1);
+    Serial.print(fanThreshold, 1);
     Serial.println(" -> Fan OFF");
     changedAny = setFan(false) || changedAny;
   }
 
-  if (humidity <= fogOnThreshold && !fogState) {
-    Serial.print("[AUTO] Hum <= ");
-    Serial.print(fogOnThreshold, 1);
+  if (humidity < fogThreshold && !fogState) {
+    Serial.print("[AUTO] Hum < ");
+    Serial.print(fogThreshold, 1);
     Serial.println(" -> Fog ON");
     changedAny = setFog(true) || changedAny;
-  } else if (humidity >= fogOffThreshold && fogState) {
+  } else if (humidity >= fogThreshold && fogState) {
     Serial.print("[AUTO] Hum >= ");
-    Serial.print(fogOffThreshold, 1);
+    Serial.print(fogThreshold, 1);
     Serial.println(" -> Fog OFF");
     changedAny = setFog(false) || changedAny;
   }
