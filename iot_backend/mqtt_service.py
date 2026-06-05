@@ -62,15 +62,28 @@ def parse_sensor_payload(raw_payload, fallback_sensor_id):
     if location is not None:
         location = str(location)
 
-    temperature = payload.get("temperature") or payload.get("temp") or payload.get("t")
-    humidity = payload.get("humidity") or payload.get("hum") or payload.get("h")
-    if temperature is not None and humidity is not None:
-        return {
+    temperature = payload.get("temperature") if "temperature" in payload else payload.get("temp", payload.get("t"))
+    humidity = payload.get("humidity") if "humidity" in payload else payload.get("hum", payload.get("h"))
+    if temperature is not None or humidity is not None:
+        reading = {
             "sensor_id": sensor_id,
+            "source": sensor_id,
             "location": location,
-            "temperature": float(temperature),
-            "humidity": float(humidity),
+            "timestamp": payload.get("timestamp"),
+            "source_type": payload.get("source_type"),
+            "provider": payload.get("provider"),
+            "environment_type": payload.get("environment_type"),
+            "location_province": payload.get("location_province"),
+            "latitude": payload.get("latitude"),
+            "longitude": payload.get("longitude"),
+            "temperature_unit": payload.get("temperature_unit") or "C",
+            "humidity_unit": payload.get("humidity_unit") or "%",
         }
+        if temperature is not None:
+            reading["temperature"] = float(temperature)
+        if humidity is not None:
+            reading["humidity"] = float(humidity)
+        return reading
 
     metric_type = payload.get("metric_type")
     value = payload.get("value")

@@ -9,6 +9,10 @@
 
 // =====================================================
 // ESP32 + DHT11 + MQTT + Relay Fan/Fog
+// Current project flow:
+// - Publish one sensor-level MQTT payload containing both temperature and humidity
+// - Receive manual/auto relay commands via ptdl/devices/{sensor_id}/commands
+// - Publish WiFi scan results and device state back to MQTT
 // Final wiring:
 // - Fan GPIO18: active LOW
 // - Fog GPIO19: active HIGH
@@ -25,17 +29,14 @@ const char* MQTT_USER = "sensor_user";
 const char* MQTT_PASSWORD = "123456";
 
 // ===== Device =====
+// Keep these metadata values aligned with the sensor you create in the web app.
 const char* SENSOR_ID = "esp32_devkit_v1";
 const char* LOCATION = "Lab";
+const char* LOCATION_PROVINCE = "Ho Chi Minh City";
+const char* SOURCE_TYPE = "physical_iot";
+const char* PROVIDER = "esp32";
+const char* ENVIRONMENT_TYPE = "indoor";
 const char* ALERT_CONFIG_NAMESPACE = "alert_cfg";
-
-// ===== MQTT topics =====
-const char* MQTT_READING_TOPIC = "sensors/esp32_devkit_v1/data";
-const char* MQTT_COMMAND_TOPIC = "ptdl/devices/esp32_devkit_v1/commands";
-const char* MQTT_CONFIG_TOPIC = "ptdl/devices/esp32_devkit_v1/config";
-const char* MQTT_LOG_TOPIC = "ptdl/devices/esp32_devkit_v1/logs";
-const char* MQTT_STATUS_TOPIC = "ptdl/devices/esp32_devkit_v1/state";
-const char* MQTT_WIFI_LIST_TOPIC = "ptdl/devices/esp32_devkit_v1/wifi-list";
 const char* MQTT_GLOBAL_STATUS_TOPIC = "ptdl/status";
 
 // ===== Pins =====
@@ -113,6 +114,10 @@ void refreshThresholdConfigs();
 bool hasStoredWiFiCredentials();
 bool startWiFiConfigPortal();
 void syncConnectedWiFiToPreferences(const char* source);
+String getSensorReadingTopic();
+String getDeviceTopic(const char* suffix);
+String getIsoTimestamp();
+void publishSensorReading(float temperature, float humidity, const String& timestamp);
 
 // ===== Time =====
 bool isTimeValid() {
@@ -120,15 +125,25 @@ bool isTimeValid() {
   return now > 1700000000;
 }
 
-String getFormattedTime() {
+String getIsoTimestamp() {
   time_t now = time(nullptr);
   struct tm* timeinfo = localtime(&now);
-  char buffer[25];
+  char buffer[32];
 
   if (timeinfo == nullptr || !isTimeValid()) {
-    snprintf(buffer, sizeof(buffer), "1970-01-01 00:00:00");
+    snprintf(buffer, sizeof(buffer), "1970-01-01T00:00:00+07:00");
   } else {
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
+    snprintf(
+      buffer,
+      sizeof(buffer),
+      "%04d-%02d-%02dT%02d:%02d:%02d+07:00",
+      timeinfo->tm_year + 1900,
+      timeinfo->tm_mon + 1,
+      timeinfo->tm_mday,
+      timeinfo->tm_hour,
+      timeinfo->tm_min,
+      timeinfo->tm_sec
+    );
   }
 
   return String(buffer);
@@ -152,12 +167,20 @@ bool syncClock() {
   timeSynced = isTimeValid();
   if (timeSynced) {
     Serial.print("[Time] Synced: ");
-    Serial.println(getFormattedTime());
+    Serial.println(getIsoTimestamp());
   } else {
     Serial.println("[Time] NTP sync failed. Sensor publish will wait.");
   }
 
   return timeSynced;
+}
+
+String getSensorReadingTopic() {
+  return String("sensors/") + SENSOR_ID + "/data";
+}
+
+String getDeviceTopic(const char* suffix) {
+  return String("ptdl/devices/") + SENSOR_ID + "/" + suffix;
 }
 
 // ===== WiFi storage =====
@@ -662,22 +685,24 @@ void connectMQTT() {
   Serial.print(":");
   Serial.println(MQTT_PORT);
 
+  String mqttCommandTopic = getDeviceTopic("commands");
+  String mqttConfigTopic = getDeviceTopic("config");
   String clientId = String("ptdl-") + SENSOR_ID + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
   bool ok = mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD);
 
   if (ok) {
     Serial.println("[MQTT] Connected");
 
-    mqtt.subscribe(MQTT_COMMAND_TOPIC);
-    mqtt.subscribe(MQTT_CONFIG_TOPIC);
+    mqtt.subscribe(mqttCommandTopic.c_str());
+    mqtt.subscribe(mqttConfigTopic.c_str());
 
     Serial.print("[MQTT] Subscribed: ");
-    Serial.println(MQTT_COMMAND_TOPIC);
+    Serial.println(mqttCommandTopic);
     Serial.print("[MQTT] Subscribed: ");
-    Serial.println(MQTT_CONFIG_TOPIC);
+    Serial.println(mqttConfigTopic);
 
     mqtt.publish(MQTT_GLOBAL_STATUS_TOPIC, "ESP32 connected", false);
-    mqtt.publish(MQTT_LOG_TOPIC, "ESP32 firmware connected", false);
+    mqtt.publish(getDeviceTopic("logs").c_str(), "ESP32 firmware connected", false);
     publishDeviceState();
   } else {
     Serial.print("[MQTT] Failed, rc=");
@@ -692,7 +717,7 @@ void publishDeviceState() {
   StaticJsonDocument<512> doc;
   doc["sensor_id"] = SENSOR_ID;
   doc["location"] = LOCATION;
-  doc["timestamp"] = getFormattedTime();
+  doc["timestamp"] = getIsoTimestamp();
 
   JsonObject state = doc.createNestedObject("state");
   state["fan"] = fanState;
@@ -709,33 +734,39 @@ void publishDeviceState() {
   char payload[512];
   serializeJson(doc, payload, sizeof(payload));
 
-  bool ok = mqtt.publish(MQTT_STATUS_TOPIC, payload, true);
+  String topic = getDeviceTopic("state");
+  bool ok = mqtt.publish(topic.c_str(), payload, true);
 
   Serial.print("[MQTT] Publish state ");
   Serial.println(ok ? "OK" : "FAILED");
   Serial.println(payload);
 }
 
-void publishMetric(const char* metricType, float value, const char* unit, const String& timestamp) {
+void publishSensorReading(float temperature, float humidity, const String& timestamp) {
   if (!mqtt.connected()) return;
 
-  StaticJsonDocument<320> doc;
+  StaticJsonDocument<512> doc;
   doc["timestamp"] = timestamp;
-  doc["metric_type"] = metricType;
-  doc["value"] = value;
+  doc["sensor_id"] = SENSOR_ID;
   doc["source"] = SENSOR_ID;
   doc["location"] = LOCATION;
-  doc["unit"] = unit;
+  doc["location_province"] = LOCATION_PROVINCE;
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["temperature_unit"] = "C";
+  doc["humidity_unit"] = "%";
+  doc["source_type"] = SOURCE_TYPE;
+  doc["provider"] = PROVIDER;
+  doc["environment_type"] = ENVIRONMENT_TYPE;
   doc["saved"] = true;
 
-  char payload[320];
+  char payload[512];
   serializeJson(doc, payload, sizeof(payload));
 
-  bool ok = mqtt.publish(MQTT_READING_TOPIC, payload, false);
+  String topic = getSensorReadingTopic();
+  bool ok = mqtt.publish(topic.c_str(), payload, false);
 
-  Serial.print("[MQTT] Published ");
-  Serial.print(metricType);
-  Serial.print(" ");
+  Serial.print("[MQTT] Published sensor reading ");
   Serial.println(ok ? "OK" : "FAILED");
   Serial.println(payload);
 }
@@ -917,7 +948,7 @@ void publishWifiList() {
 
   DynamicJsonDocument doc(4096);
   doc["device_id"] = SENSOR_ID;
-  doc["timestamp"] = getFormattedTime();
+  doc["timestamp"] = getIsoTimestamp();
 
   JsonArray networks = doc.createNestedArray("networks");
   int maxNetworks = min(networkCount, 15);
@@ -938,14 +969,15 @@ void publishWifiList() {
 
   String body;
   serializeJson(doc, body);
-  bool ok = mqtt.publish(MQTT_WIFI_LIST_TOPIC, body.c_str(), false);
+  String topic = getDeviceTopic("wifi-list");
+  bool ok = mqtt.publish(topic.c_str(), body.c_str(), false);
 
   Serial.print("[WiFi Scan] Found ");
   Serial.print(networkCount);
   Serial.print(" networks, published ");
   Serial.print(networks.size());
   Serial.print(" to ");
-  Serial.print(MQTT_WIFI_LIST_TOPIC);
+  Serial.print(topic);
   Serial.print(" (ok=");
   Serial.print(ok ? "true" : "false");
   Serial.println(")");
@@ -1127,7 +1159,6 @@ void loop() {
     return;
   }
 
-  String timestamp = getFormattedTime();
-  publishMetric("temperature", temperature, "°C", timestamp);
-  publishMetric("humidity", humidity, "%", timestamp);
+  String timestamp = getIsoTimestamp();
+  publishSensorReading(temperature, humidity, timestamp);
 }

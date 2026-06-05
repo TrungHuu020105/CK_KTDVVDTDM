@@ -506,38 +506,92 @@ function SensorSettingMenu({
   onToggleMist,
 }) {
   return (
-    <div className="absolute left-6 right-6 top-[calc(100%-5.5rem)] z-20 rounded-xl border border-neon-cyan/30 bg-dark-900 p-5 shadow-2xl">
-      <div className="space-y-4 text-lg">
-        <button onClick={onOpenAlerts} className="flex items-center gap-3 text-yellow-300 hover:text-yellow-200">
-          <AlertCircle className="w-5 h-5" /> Alerts
+    <div className="absolute bottom-[5.25rem] left-6 z-20 w-[19rem] max-w-[calc(100%-3rem)] rounded-lg border border-neon-cyan/30 bg-dark-900 p-4 shadow-2xl">
+      <div className="space-y-3 text-base">
+        <button onClick={onOpenAlerts} className="flex items-center gap-2.5 text-yellow-300 hover:text-yellow-200">
+          <AlertCircle className="w-4 h-4" /> Alerts
         </button>
-        <button onClick={onOpenEdit} className="flex items-center gap-3 text-blue-200 hover:text-blue-100">
-          <Edit3 className="w-5 h-5" /> Edit
+        <button onClick={onOpenEdit} className="flex items-center gap-2.5 text-blue-200 hover:text-blue-100">
+          <Edit3 className="w-4 h-4" /> Edit
         </button>
-        <button onClick={onOpenWifi} className="flex items-center gap-3 text-sky-300 hover:text-sky-200">
-          <Wifi className="w-5 h-5" /> WiFi
+        <button onClick={onOpenWifi} className="flex items-center gap-2.5 text-sky-300 hover:text-sky-200">
+          <Wifi className="w-4 h-4" /> WiFi
         </button>
-        <button onClick={onOpenAiContext} className="flex items-center gap-3 text-neon-cyan hover:text-cyan-200">
-          <Bot className="w-5 h-5" /> AI Context
+        <button onClick={onOpenAiContext} className="flex items-center gap-2.5 text-neon-cyan hover:text-cyan-200">
+          <Bot className="w-4 h-4" /> AI Context
         </button>
       </div>
 
-      <div className="border-t border-gray-700 my-5" />
-      <p className="text-orange-300 text-sm tracking-wide mb-4">TEST THIẾT BỊ</p>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <button onClick={() => onToggleFan(true)} className={`rounded-lg border px-4 py-3 ${state.fan ? 'border-green-300 bg-green-500/20 text-green-100' : 'border-green-400/30 bg-green-500/10 text-green-200'}`}>
-          <Fan className="w-5 h-5 mx-auto mb-1" /> Bật quạt
-        </button>
-        <button onClick={() => onToggleFan(false)} className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-red-200">
-          Tắt quạt
-        </button>
+      <div className="border-t border-gray-700 my-4" />
+      <p className="text-orange-300 text-xs tracking-[0.2em] mb-3">TEST THIẾT BỊ</p>
+      <div className="space-y-2.5">
+        <DeviceToggleRow
+          label="Quạt"
+          active={Boolean(state.fan)}
+          activeText="Đang bật"
+          inactiveText="Đang tắt"
+          tone="green"
+          icon={Fan}
+          onTurnOn={() => onToggleFan(true)}
+          onTurnOff={() => onToggleFan(false)}
+        />
+        <DeviceToggleRow
+          label="Phun sương"
+          active={Boolean(state.mist)}
+          activeText="Đang bật"
+          inactiveText="Đang tắt"
+          tone="sky"
+          icon={Droplets}
+          onTurnOn={() => onToggleMist(true)}
+          onTurnOff={() => onToggleMist(false)}
+        />
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => onToggleMist(true)} className={`rounded-lg border px-4 py-3 ${state.mist ? 'border-sky-300 bg-sky-500/20 text-sky-100' : 'border-sky-400/30 bg-sky-500/10 text-sky-200'}`}>
-          <Droplets className="w-5 h-5 mx-auto mb-1" /> Bật phun
+    </div>
+  )
+}
+
+function DeviceToggleRow({ label, active, activeText, inactiveText, tone, icon: Icon, onTurnOn, onTurnOff }) {
+  const toneClasses = tone === 'green'
+    ? {
+        iconWrap: active ? 'border-green-400/25 bg-green-500/10' : 'border-white/10 bg-dark-800/60',
+        icon: active ? 'text-green-200' : 'text-gray-400',
+        label: active ? 'text-green-100' : 'text-white',
+        onButton: active ? 'border-green-400/50 bg-green-500/20 text-green-100' : 'border-white/10 bg-dark-800/70 text-gray-300 hover:border-green-400/30 hover:text-green-100',
+        offButton: active ? 'border-white/10 bg-dark-800/70 text-gray-300 hover:border-red-400/30 hover:text-red-100' : 'border-red-400/45 bg-red-500/15 text-red-100',
+      }
+    : {
+        iconWrap: active ? 'border-sky-400/25 bg-sky-500/10' : 'border-white/10 bg-dark-800/60',
+        icon: active ? 'text-sky-200' : 'text-gray-400',
+        label: active ? 'text-sky-100' : 'text-white',
+        onButton: active ? 'border-sky-400/50 bg-sky-500/20 text-sky-100' : 'border-white/10 bg-dark-800/70 text-gray-300 hover:border-sky-400/30 hover:text-sky-100',
+        offButton: active ? 'border-white/10 bg-dark-800/70 text-gray-300 hover:border-red-400/30 hover:text-red-100' : 'border-red-400/45 bg-red-500/15 text-red-100',
+      }
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-white/8 bg-white/[0.03] px-3 py-2">
+      <div className="flex items-center gap-2.5">
+        <div className={`rounded-md border p-1.5 ${toneClasses.iconWrap} ${toneClasses.icon}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div>
+          <p className={`text-sm font-semibold ${toneClasses.label}`}>{label}</p>
+          <p className={`text-xs ${active ? 'text-gray-200' : 'text-gray-400'}`}>{active ? activeText : inactiveText}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onTurnOn}
+          className={`min-w-[3.1rem] rounded-md border px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors ${toneClasses.onButton}`}
+        >
+          ON
         </button>
-        <button onClick={() => onToggleMist(false)} className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-red-200">
-          Tắt phun
+        <button
+          type="button"
+          onClick={onTurnOff}
+          className={`min-w-[3.1rem] rounded-md border px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors ${toneClasses.offButton}`}
+        >
+          OFF
         </button>
       </div>
     </div>
