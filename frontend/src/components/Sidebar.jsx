@@ -68,7 +68,7 @@ export default function Sidebar({ activeMenu, setActiveMenu, health }) {
 
       {(!sensors || sensors.length === 0) && user?.role !== 'admin' && (
         <div className="mb-6 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <p className="text-xs text-yellow-400">No IoT devices yet. Create a physical ESP32 device or a virtual IoT device.</p>
+          <p className="text-xs text-yellow-400">No IoT devices yet. Create a physical ESP32 device to start receiving data.</p>
         </div>
       )}
 

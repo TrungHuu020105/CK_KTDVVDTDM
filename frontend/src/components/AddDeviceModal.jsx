@@ -1,5 +1,5 @@
 ﻿import { useState } from 'react'
-import { X, Plus, Cloud, Cpu } from 'lucide-react'
+import { X, Plus, Cpu } from 'lucide-react'
 
 const VN_PROVINCES = [
   'An Giang', 'Ba Ria - Vung Tau', 'Bac Giang', 'Bac Kan', 'Bac Lieu', 'Bac Ninh', 'Ben Tre',
@@ -24,7 +24,6 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
   const [formData, setFormData] = useState({
     name: '',
     source: '',
-    source_type: 'physical_iot',
     environment_type: 'indoor',
     location: '',
     location_province: 'Ho Chi Minh City',
@@ -33,11 +32,7 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
 
   const handleChange = (e) => {
     const { name, value } = e.target
-    setFormData((prev) => {
-      const next = { ...prev, [name]: value }
-      if (name === 'source_type' && value === 'virtual_meteostat') next.environment_type = 'outdoor'
-      return next
-    })
+    setFormData((prev) => ({ ...prev, [name]: value }))
     setError('')
   }
 
@@ -48,15 +43,11 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
     if (!/^[a-zA-Z0-9_-]+$/.test(formData.source)) {
       return setError('Sensor ID can only contain letters, numbers, hyphens, and underscores')
     }
-    if (formData.source_type === 'virtual_meteostat' && formData.environment_type !== 'outdoor') {
-      return setError('Virtual Meteostat sensors must be outdoor')
-    }
-
     try {
       await onAdd({
         name: formData.name.trim(),
         source: normalizeSource(formData.source),
-        source_type: formData.source_type,
+        source_type: 'physical_iot',
         environment_type: formData.environment_type,
         location: formData.location.trim(),
         location_province: formData.location_province,
@@ -66,7 +57,6 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
       setFormData({
         name: '',
         source: '',
-        source_type: 'physical_iot',
         environment_type: 'indoor',
         location: '',
         location_province: 'Ho Chi Minh City',
@@ -101,26 +91,18 @@ export default function AddDeviceModal({ isOpen, onClose, onAdd, isLoading }) {
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Device / Sensor ID</label>
-            <input name="source" value={formData.source} onChange={handleChange} placeholder="esp32_devkit_v1 or virtual_meteostat_hcm" className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60 font-mono" />
+            <input name="source" value={formData.source} onChange={handleChange} placeholder="esp32_devkit_v1" className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60 font-mono" />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className={`border rounded-lg p-4 cursor-pointer ${formData.source_type === 'physical_iot' ? 'border-neon-cyan bg-neon-cyan/10' : 'border-gray-700 bg-dark-900'}`}>
-              <input type="radio" name="source_type" value="physical_iot" checked={formData.source_type === 'physical_iot'} onChange={handleChange} className="sr-only" />
-              <div className="flex items-center gap-2 text-white"><Cpu className="w-5 h-5" /> Physical ESP32</div>
-              <p className="text-xs text-gray-400 mt-2">Realtime MQTT sensor.</p>
-            </label>
-            <label className={`border rounded-lg p-4 cursor-pointer ${formData.source_type === 'virtual_meteostat' ? 'border-neon-cyan bg-neon-cyan/10' : 'border-gray-700 bg-dark-900'}`}>
-              <input type="radio" name="source_type" value="virtual_meteostat" checked={formData.source_type === 'virtual_meteostat'} onChange={handleChange} className="sr-only" />
-              <div className="flex items-center gap-2 text-white"><Cloud className="w-5 h-5" /> Virtual Meteostat</div>
-              <p className="text-xs text-gray-400 mt-2">Outdoor virtual IoT source.</p>
-            </label>
+          <div className="rounded-lg border border-neon-cyan bg-neon-cyan/10 p-4">
+            <div className="flex items-center gap-2 text-white"><Cpu className="w-5 h-5" /> Physical ESP32</div>
+            <p className="text-xs text-gray-400 mt-2">Realtime MQTT sensor.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">Environment</label>
-              <select name="environment_type" value={formData.environment_type} onChange={handleChange} disabled={formData.source_type === 'virtual_meteostat'} className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60 disabled:opacity-60">
+              <select name="environment_type" value={formData.environment_type} onChange={handleChange} className="w-full bg-dark-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-neon-cyan/60">
                 <option value="indoor">Indoor</option>
                 <option value="outdoor">Outdoor</option>
               </select>

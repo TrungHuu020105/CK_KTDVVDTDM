@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app.api.iot_backend_proxy import extract_bearer_token, proxy_iot_backend
+from app.api.iot_backend_proxy import extract_bearer_token, proxy_iot_backend, proxy_iot_backend_raw
 from app.api.routes_auth import get_current_user
 from app.services.databricks_service import DatabricksService
 
@@ -150,14 +150,30 @@ async def history(sensor_id: str, request: Request, minutes: int = 120, current_
     return proxy_iot_backend("GET", f"/api/sensors/{sensor_id}/history?minutes={minutes}", bearer_token=extract_bearer_token(request))
 
 
-@router.post("/{sensor_id}/sync-meteostat")
-async def sync_meteostat(sensor_id: str, request: Request, hours: int = 24, current_user=Depends(get_current_user)):
+@router.get("/{sensor_id}/history/export")
+async def export_history_csv(
+    sensor_id: str,
+    request: Request,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    current_user=Depends(get_current_user),
+):
     _ = current_user
-    return proxy_iot_backend(
-        "POST",
-        f"/api/sensors/{sensor_id}/sync-meteostat?hours={hours}",
+    query_parts: list[str] = []
+    if from_date:
+        query_parts.append(f"from_date={from_date}")
+    if to_date:
+        query_parts.append(f"to_date={to_date}")
+    query_string = f"?{'&'.join(query_parts)}" if query_parts else ""
+    content, media_type, content_disposition = proxy_iot_backend_raw(
+        "GET",
+        f"/api/sensors/{sensor_id}/history/export{query_string}",
         bearer_token=extract_bearer_token(request),
     )
+    headers: dict[str, str] = {}
+    if content_disposition:
+        headers["Content-Disposition"] = content_disposition
+    return Response(content=content, media_type=media_type, headers=headers)
 
 
 @router.get("/{sensor_id}/forecast")

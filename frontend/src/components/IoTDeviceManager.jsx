@@ -232,20 +232,6 @@ export default function IoTDeviceManager() {
     await loadDetails(sensor)
   }
 
-  const syncVirtualSensor = async (sensor) => {
-    const sensorId = getSensorId(sensor)
-    try {
-      const res = await api.post(`/api/sensors/${sensorId}/sync-meteostat`, null, { params: { hours: 24 } })
-      if (res.data?.latest_reading) {
-        setLatestMap((prev) => ({ ...prev, [sensorId]: res.data.latest_reading }))
-      }
-      showToast(res.data?.message || 'Đã đồng bộ Virtual IoT.')
-      await fetchSensors()
-    } catch (err) {
-      showToast(err.response?.data?.detail || 'Không đồng bộ được Virtual IoT.', 'error')
-    }
-  }
-
   const applySensorPatch = async (sensor, payload, successMessage = 'Saved') => {
     const sensorId = getSensorId(sensor)
     const res = await api.patch(`/api/sensors/${sensorId}`, payload)
@@ -310,11 +296,6 @@ export default function IoTDeviceManager() {
 
   const setPhysicalDeviceState = async (sensor, key, value) => {
     const sensorId = getSensorId(sensor)
-    if (sensor.source_type === 'virtual_meteostat') {
-      showToast('Virtual sensor cannot receive hardware commands.', 'warning')
-      return
-    }
-
     const payload = key === 'mist' ? { fog: Boolean(value) } : { [key]: Boolean(value) }
     try {
       await api.post(`/api/devices/${sensorId}/manual-command`, payload)
@@ -363,7 +344,6 @@ export default function IoTDeviceManager() {
           {sensors.map((sensor) => {
             const sensorId = getSensorId(sensor)
             const latest = latestMap[sensorId] || sensor.latest_reading || {}
-            const isVirtual = sensor.source_type === 'virtual_meteostat'
             const state = deviceStates[sensorId] || {}
             const tempThreshold = formatThreshold(sensor.temperature_min_threshold, sensor.temperature_max_threshold, '°C')
             const humidityThreshold = formatThreshold(sensor.humidity_min_threshold, sensor.humidity_max_threshold, '%')
@@ -396,7 +376,7 @@ export default function IoTDeviceManager() {
                   </div>
                   <div className="mb-4">
                     <span className="inline-block px-3 py-1 rounded border border-neon-cyan/30 bg-neon-cyan/10 text-neon-cyan text-sm">
-                      {isVirtual ? 'Virtual IoT' : sensor.environment_type === 'outdoor' ? 'Ngoài trời' : 'Trong nhà'}
+                      {sensor.environment_type === 'outdoor' ? 'Ngoài trời' : 'Trong nhà'}
                     </span>
                   </div>
 
@@ -456,7 +436,6 @@ export default function IoTDeviceManager() {
                   <SensorSettingMenu
                     sensor={sensor}
                     state={state}
-                    onVirtualSync={() => syncVirtualSensor(sensor)}
                     onOpenAlerts={() => openSettingModal('alerts', sensor)}
                     onOpenEdit={() => openSettingModal('edit', sensor)}
                     onOpenWifi={() => openSettingModal('wifi', sensor)}
@@ -519,7 +498,6 @@ export default function IoTDeviceManager() {
 function SensorSettingMenu({
   sensor,
   state,
-  onVirtualSync,
   onOpenAlerts,
   onOpenEdit,
   onOpenWifi,
@@ -527,7 +505,6 @@ function SensorSettingMenu({
   onToggleFan,
   onToggleMist,
 }) {
-  const isVirtual = sensor.source_type === 'virtual_meteostat'
   return (
     <div className="absolute left-6 right-6 top-[calc(100%-5.5rem)] z-20 rounded-xl border border-neon-cyan/30 bg-dark-900 p-5 shadow-2xl">
       <div className="space-y-4 text-lg">
@@ -547,11 +524,6 @@ function SensorSettingMenu({
 
       <div className="border-t border-gray-700 my-5" />
       <p className="text-orange-300 text-sm tracking-wide mb-4">TEST THIẾT BỊ</p>
-      {isVirtual && (
-        <button onClick={onVirtualSync} className="w-full mb-4 px-4 py-3 rounded-lg border border-sky-400/30 bg-sky-500/10 text-sky-200 hover:border-sky-300">
-          Sync dữ liệu Virtual IoT
-        </button>
-      )}
       <div className="grid grid-cols-2 gap-3 mb-3">
         <button onClick={() => onToggleFan(true)} className={`rounded-lg border px-4 py-3 ${state.fan ? 'border-green-300 bg-green-500/20 text-green-100' : 'border-green-400/30 bg-green-500/10 text-green-200'}`}>
           <Fan className="w-5 h-5 mx-auto mb-1" /> Bật quạt
@@ -653,7 +625,7 @@ function EmptyState({ onAdd }) {
     <div className="rounded-xl border border-dashed border-gray-700 bg-dark-800/50 p-10 text-center">
       <Thermometer className="w-10 h-10 text-neon-cyan mx-auto mb-3" />
       <h3 className="text-white text-xl font-bold mb-2">No IoT devices yet</h3>
-      <p className="text-gray-400 mb-5">Add a physical ESP32 sensor or a virtual IoT sensor.</p>
+      <p className="text-gray-400 mb-5">Add a physical ESP32 sensor to start receiving realtime data.</p>
       <button onClick={onAdd} className="inline-flex items-center gap-2 px-5 py-3 bg-neon-cyan/20 border border-neon-cyan/40 text-neon-cyan rounded-lg hover:border-neon-cyan">
         <Plus className="w-5 h-5" /> Add Device
       </button>

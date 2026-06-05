@@ -25,7 +25,6 @@ export default function SensorWifiModal({ isOpen, sensor, onClose, onMessage }) 
   const [password, setPassword] = useState('')
 
   const sensorId = sensor?.sensor_id || sensor?.source || ''
-  const isVirtual = sensor?.source_type === 'virtual_meteostat'
 
   const loadWifiStatus = async () => {
     if (!sensorId) return
@@ -67,10 +66,6 @@ export default function SensorWifiModal({ isOpen, sensor, onClose, onMessage }) 
 
   const scanAgain = async () => {
     if (!sensorId) return
-    if (isVirtual) {
-      onMessage?.('Đây là sensor ảo, không có module WiFi vật lý', 'warning')
-      return
-    }
 
     setLoading(true)
     try {
@@ -90,10 +85,6 @@ export default function SensorWifiModal({ isOpen, sensor, onClose, onMessage }) 
   const saveWifi = async () => {
     if (!ssid.trim()) {
       onMessage?.('Vui lòng nhập tên WiFi (SSID)', 'warning')
-      return
-    }
-    if (isVirtual) {
-      onMessage?.('Đây là sensor ảo, không có module WiFi vật lý', 'warning')
       return
     }
 
@@ -174,11 +165,6 @@ export default function SensorWifiModal({ isOpen, sensor, onClose, onMessage }) 
             className="w-full rounded-xl border border-slate-600 bg-[#030f3a] px-4 py-3 text-base text-white outline-none focus:border-cyan-300"
           />
 
-          {isVirtual && (
-            <div className="rounded-xl border border-yellow-400/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
-              Đây là sensor ảo. Các chức năng WiFi vật lý sẽ bị vô hiệu hóa.
-            </div>
-          )}
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
@@ -188,7 +174,7 @@ export default function SensorWifiModal({ isOpen, sensor, onClose, onMessage }) 
           <button
             type="button"
             onClick={saveWifi}
-            disabled={loading || isVirtual}
+            disabled={loading}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/60 bg-cyan-600/30 py-3 text-base font-semibold text-cyan-200 transition hover:bg-cyan-600/40 disabled:opacity-60"
           >
             <Wifi className="h-5 w-5" />

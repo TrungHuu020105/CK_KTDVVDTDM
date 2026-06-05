@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -15,7 +17,7 @@ from iot_backend.database import get_db
 from iot_backend.models import IoTDevice, SensorReading, User
 from iot_backend.services.sensor_reading_service import create_sensor_reading, parse_event_ts, serialize_reading
 from iot_backend.services.threshold_alert_service import check_and_trigger_metric_alert
-from iot_backend.services.weather_service import geocode_location, get_virtual_weather_readings
+from iot_backend.services.weather_service import geocode_location
 
 router = APIRouter(prefix="/api/sensors", tags=["sensors"])
 VN_TZ = timezone(timedelta(hours=7))
@@ -39,7 +41,7 @@ def _serialize_device(device: IoTDevice, latest: SensorReading | None = None) ->
         "device_type": "temperature_humidity",
         "capabilities": (device.capabilities or "temperature,humidity").split(","),
         "source_type": device.source_type or "physical_iot",
-        "provider": "meteostat" if device.source_type == "virtual_meteostat" else "esp32",
+        "provider": "esp32",
         "environment_type": device.environment_type,
         "location": device.location,
         "location_province": device.location_province,
@@ -68,6 +70,30 @@ def _latest_for_sensor(db: Session, sensor_id: str) -> SensorReading | None:
         .order_by(SensorReading.event_ts.desc(), SensorReading.id.desc())
         .first()
     )
+
+
+def _sensor_device_or_404(db: Session, sensor_id: str, user: User) -> IoTDevice:
+    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
+    if not device or device.source_type == "virtual_meteostat" or (user.role != "admin" and device.user_id != user.id):
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    return device
+
+
+def _resolve_history_window(
+    from_date: str | None,
+    to_date: str | None,
+    minutes: int,
+) -> tuple[datetime, datetime | None]:
+    if from_date or to_date:
+        normalized_from = from_date or to_date
+        normalized_to = to_date or from_date
+        start = datetime.fromisoformat(str(normalized_from)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = datetime.fromisoformat(str(normalized_to)).replace(hour=23, minute=59, second=59, microsecond=999999)
+        if start > end:
+            start, end = end.replace(hour=0, minute=0, second=0, microsecond=0), start.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return start, end
+
+    return datetime.now(VN_TZ).replace(tzinfo=None) - timedelta(minutes=minutes), None
 
 
 class SensorCreateRequest(BaseModel):
@@ -131,24 +157,9 @@ class GeocodeRequest(BaseModel):
     location_query: str
 
 
-def _ensure_coordinates_for_device(device: IoTDevice, db: Session) -> None:
-    if device.latitude is not None and device.longitude is not None:
-        return
-
-    query = device.location_query or device.location_province or device.location
-    geo = geocode_location(query) if query else None
-    if not geo:
-        raise HTTPException(status_code=400, detail="Sensor location has no coordinates")
-
-    device.latitude = geo.latitude
-    device.longitude = geo.longitude
-    device.timezone_name = geo.timezone
-    db.flush()
-
-
 @router.get("")
 def list_sensors(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    query = db.query(IoTDevice)
+    query = db.query(IoTDevice).filter(IoTDevice.source_type != "virtual_meteostat")
     if user.role != "admin":
         query = query.filter(IoTDevice.user_id == user.id)
     devices = query.order_by(IoTDevice.id.asc()).all()
@@ -169,8 +180,8 @@ def create_sensor(payload: SensorCreateRequest, user: User = Depends(get_current
 
     environment_type = (payload.environment_type or "indoor").strip().lower()
     source_type = (payload.source_type or "physical_iot").strip().lower()
-    if source_type == "virtual_meteostat" and environment_type != "outdoor":
-        raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
+    if source_type != "physical_iot":
+        raise HTTPException(status_code=400, detail="Virtual sensors have been removed. Please create a physical ESP32 sensor.")
 
     latitude = payload.latitude
     longitude = payload.longitude
@@ -218,17 +229,15 @@ def create_sensor(payload: SensorCreateRequest, user: User = Depends(get_current
 
 @router.get("/{sensor_id}")
 def get_sensor(sensor_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
+    device = _sensor_device_or_404(db, sensor_id, user)
     return _serialize_device(device, _latest_for_sensor(db, sensor_id))
 
 
 @router.patch("/{sensor_id}")
 def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
+    device = _sensor_device_or_404(db, sensor_id, user)
+    if "source_type" in payload.model_fields_set and payload.source_type not in {None, "physical_iot"}:
+        raise HTTPException(status_code=400, detail="Virtual sensors have been removed from this system.")
     for field in payload.model_fields_set:
         setattr(device, field, getattr(payload, field))
     if device.device_type == "temperature_humidity":
@@ -237,8 +246,6 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
         # affect the other through legacy fallback alert logic.
         device.min_threshold = None
         device.max_threshold = None
-    if device.source_type == "virtual_meteostat" and device.environment_type != "outdoor":
-        raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
     db.commit()
     db.refresh(device)
     return _serialize_device(device, _latest_for_sensor(db, sensor_id))
@@ -246,9 +253,7 @@ def update_sensor(sensor_id: str, payload: SensorUpdateRequest, user: User = Dep
 
 @router.delete("/{sensor_id}")
 def delete_sensor(sensor_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
+    device = _sensor_device_or_404(db, sensor_id, user)
     db.delete(device)
     db.commit()
     return {"message": "Sensor deleted"}
@@ -300,26 +305,92 @@ def ingest_reading(payload: SensorReadingRequest, user: User = Depends(get_curre
 @router.get("/{sensor_id}/latest")
 def latest_reading(sensor_id: str, response: Response, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
+    _sensor_device_or_404(db, sensor_id, user)
     row = _latest_for_sensor(db, sensor_id)
     return serialize_reading(row) if row else {"sensor_id": sensor_id, "temperature": None, "humidity": None}
 
 
 @router.get("/{sensor_id}/history")
 def reading_history(sensor_id: str, minutes: int = Query(120, ge=1, le=525600), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
-    since = datetime.now(VN_TZ).replace(tzinfo=None) - timedelta(minutes=minutes)
-    rows = (
+    _sensor_device_or_404(db, sensor_id, user)
+    since, until = _resolve_history_window(None, None, minutes)
+    query = (
         db.query(SensorReading)
         .filter(SensorReading.sensor_id == sensor_id, SensorReading.event_ts >= since)
         .order_by(SensorReading.event_ts.asc())
-        .all()
     )
+    if until is not None:
+        query = query.filter(SensorReading.event_ts <= until)
+    rows = query.all()
     return {"sensor_id": sensor_id, "readings": [serialize_reading(row) for row in rows], "count": len(rows)}
+
+
+@router.get("/{sensor_id}/history/export")
+def export_sensor_history_csv(
+    sensor_id: str,
+    from_date: str | None = Query(default=None),
+    to_date: str | None = Query(default=None),
+    minutes: int = Query(1440, ge=1, le=525600),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    device = _sensor_device_or_404(db, sensor_id, user)
+    try:
+        since, until = _resolve_history_window(from_date, to_date, minutes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid from_date/to_date. Use YYYY-MM-DD.") from exc
+
+    query = (
+        db.query(SensorReading)
+        .filter(SensorReading.sensor_id == sensor_id, SensorReading.event_ts >= since)
+        .order_by(SensorReading.event_ts.asc())
+    )
+    if until is not None:
+        query = query.filter(SensorReading.event_ts <= until)
+    rows = query.all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "sensor_id",
+        "sensor_name",
+        "event_ts",
+        "temperature",
+        "humidity",
+        "temperature_unit",
+        "humidity_unit",
+        "source_type",
+        "provider",
+        "environment_type",
+        "location",
+        "location_province",
+        "latitude",
+        "longitude",
+    ])
+    for row in rows:
+        writer.writerow([
+            row.sensor_id,
+            device.name,
+            row.event_ts.isoformat() if row.event_ts else "",
+            row.temperature if row.temperature is not None else "",
+            row.humidity if row.humidity is not None else "",
+            row.temperature_unit or "",
+            row.humidity_unit or "",
+            row.source_type or "",
+            row.provider or "",
+            row.environment_type or "",
+            row.location or "",
+            row.location_province or "",
+            row.latitude if row.latitude is not None else "",
+            row.longitude if row.longitude is not None else "",
+        ])
+
+    filename = f"{sensor_id}_history.csv"
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/geocode")
@@ -335,74 +406,4 @@ def geocode_sensor_location(payload: GeocodeRequest, user: User = Depends(get_cu
         "timezone": geo.timezone,
         "latitude": geo.latitude,
         "longitude": geo.longitude,
-    }
-
-
-@router.post("/{sensor_id}/sync-meteostat")
-def sync_virtual_meteostat_sensor(
-    sensor_id: str,
-    hours: int = Query(24, ge=1, le=720),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    device = db.query(IoTDevice).filter(IoTDevice.source == sensor_id).first()
-    if not device or (user.role != "admin" and device.user_id != user.id):
-        raise HTTPException(status_code=404, detail="Sensor not found")
-    if device.source_type != "virtual_meteostat":
-        raise HTTPException(status_code=400, detail="Only virtual Meteostat sensors can be synced")
-    if device.environment_type != "outdoor":
-        raise HTTPException(status_code=400, detail="Virtual Meteostat sensors must be outdoor")
-
-    _ensure_coordinates_for_device(device, db)
-    readings, provider = get_virtual_weather_readings(
-        latitude=device.latitude,
-        longitude=device.longitude,
-        hours=hours,
-        timezone=device.timezone_name or "auto",
-    )
-    if not readings:
-        raise HTTPException(status_code=502, detail="No weather readings available for this location")
-
-    inserted = 0
-    skipped = 0
-    latest_row = None
-    for item in readings:
-        event_ts = item.get("timestamp")
-        resolved_ts = parse_event_ts(event_ts)
-        exists = (
-            db.query(SensorReading)
-            .filter(SensorReading.sensor_id == device.source, SensorReading.event_ts == resolved_ts)
-            .first()
-        )
-        if exists:
-            skipped += 1
-            latest_row = exists
-            continue
-
-        latest_row = create_sensor_reading(
-            db,
-            sensor_id=device.source,
-            event_ts=resolved_ts,
-            temperature=item.get("temperature"),
-            humidity=item.get("humidity"),
-            source_type="virtual_meteostat",
-            provider=item.get("provider") or provider,
-            environment_type="outdoor",
-            location=device.location,
-            location_province=device.location_province,
-            latitude=device.latitude,
-            longitude=device.longitude,
-        )
-        inserted += 1
-
-    db.commit()
-    if latest_row:
-        db.refresh(latest_row)
-    return {
-        "sensor_id": device.source,
-        "provider": provider,
-        "inserted": inserted,
-        "skipped_duplicates": skipped,
-        "latest_reading": serialize_reading(latest_row) if latest_row else None,
-        "message": f"Synced {inserted} readings from {provider}",
     }

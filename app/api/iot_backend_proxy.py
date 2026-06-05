@@ -61,3 +61,48 @@ def proxy_iot_backend(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"IoT backend chưa chạy hoặc IOT_BACKEND_URL sai: {str(exc)}",
         ) from exc
+
+
+def proxy_iot_backend_raw(
+    method: str,
+    path: str,
+    *,
+    payload: dict | None = None,
+    bearer_token: str | None = None,
+    timeout: float = 30,
+) -> tuple[bytes, str, str | None]:
+    """Forward a request to iot_backend and return raw bytes plus response metadata."""
+    url = f"{IOT_BACKEND_URL}{path}"
+    headers = {"Content-Type": "application/json"}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+
+    req = urlrequest.Request(url, data=body, headers=headers, method=method.upper())
+
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            return (
+                resp.read(),
+                resp.headers.get_content_type() or "application/octet-stream",
+                resp.headers.get("Content-Disposition"),
+            )
+    except HTTPError as exc:
+        detail = f"IoT backend error HTTP {exc.code}"
+        try:
+            err = json.loads(exc.read().decode("utf-8"))
+            if isinstance(err, dict) and err.get("detail"):
+                detail = err["detail"]
+        except Exception:
+            pass
+        if exc.code == 404:
+            detail = "IoT backend route not found. Check IOT_BACKEND_URL and that iot_backend is running."
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"IoT backend chưa chạy hoặc IOT_BACKEND_URL sai: {str(exc)}",
+        ) from exc

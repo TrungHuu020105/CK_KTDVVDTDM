@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Plus, Server, Thermometer, TrendingUp } from 'lucide-react'
+import { CalendarDays, Download, Plus, Server, Thermometer, TrendingUp } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useDevices } from '../context/DeviceContext'
 import api from '../api'
@@ -23,6 +23,33 @@ const average = (values) => {
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
 }
 
+const addForecastBridge = (rows) => {
+  const bridged = (rows || []).map((row) => ({ ...row }))
+
+  const firstForecastIndex = bridged.findIndex(
+    (row) => row.forecast_temperature !== null || row.forecast_humidity !== null
+  )
+  if (firstForecastIndex <= 0) return bridged
+
+  for (let index = firstForecastIndex - 1; index >= 0; index -= 1) {
+    const row = bridged[index]
+    const hasActual = row.temperature !== null || row.humidity !== null
+    if (!hasActual) continue
+
+    if (row.temperature !== null && row.forecast_temperature === null) {
+      row.forecast_temperature = row.temperature
+      row.forecast_temperature_bridge = true
+    }
+    if (row.humidity !== null && row.forecast_humidity === null) {
+      row.forecast_humidity = row.humidity
+      row.forecast_humidity_bridge = true
+    }
+    break
+  }
+
+  return bridged
+}
+
 const listDateKeys = (fromDate, toDate) => {
   const keys = []
   const cursor = startOfDay(fromDate)
@@ -42,6 +69,7 @@ export default function UserDashboard() {
   const [fromDate, setFromDate] = useState(today())
   const [toDate, setToDate] = useState(today())
   const [error, setError] = useState('')
+  const [exporting, setExporting] = useState(false)
 
   const activeSensorId = selectedSensorId || getSensorId(sensors?.[0])
   const activeSensor = sensors.find((sensor) => getSensorId(sensor) === activeSensorId)
@@ -156,6 +184,8 @@ export default function UserDashboard() {
           humidity: row.humidity,
           forecast_temperature: null,
           forecast_humidity: null,
+          forecast_temperature_bridge: false,
+          forecast_humidity_bridge: false,
         }
       })
 
@@ -176,6 +206,8 @@ export default function UserDashboard() {
           humidity: null,
           forecast_temperature: row.temperature ?? row.predicted_temperature ?? (row.target === 'temperature' ? row.predicted_value : null),
           forecast_humidity: row.humidity ?? row.predicted_humidity ?? (row.target === 'humidity' ? row.predicted_value : null),
+          forecast_temperature_bridge: false,
+          forecast_humidity_bridge: false,
         }
       })
 
@@ -200,7 +232,7 @@ export default function UserDashboard() {
         ...forecastByHour.keys(),
       ])).sort((a, b) => Number(a) - Number(b))
 
-      return hours.map((hour) => {
+      return addForecastBridge(hours.map((hour) => {
         const actualRows = actualByHour.get(hour) || []
         const forecastRows = forecastByHour.get(hour) || []
         return {
@@ -211,8 +243,10 @@ export default function UserDashboard() {
           humidity: average(actualRows.map((row) => row.humidity)),
           forecast_temperature: average(forecastRows.map((row) => row.forecast_temperature)),
           forecast_humidity: average(forecastRows.map((row) => row.forecast_humidity)),
+          forecast_temperature_bridge: false,
+          forecast_humidity_bridge: false,
         }
-      })
+      }))
     }
 
     if (!singleDay) {
@@ -231,7 +265,7 @@ export default function UserDashboard() {
         forecastByDate.get(dateKey).push(row)
       }
 
-      return listDateKeys(normalizedFrom, normalizedTo).map((dateKey) => {
+      return addForecastBridge(listDateKeys(normalizedFrom, normalizedTo).map((dateKey) => {
         const actualRows = actualByDate.get(dateKey) || []
         const forecastRows = forecastByDate.get(dateKey) || []
         return {
@@ -242,11 +276,13 @@ export default function UserDashboard() {
           humidity: average(actualRows.map((row) => row.humidity)),
           forecast_temperature: average(forecastRows.map((row) => row.forecast_temperature)),
           forecast_humidity: average(forecastRows.map((row) => row.forecast_humidity)),
+          forecast_temperature_bridge: false,
+          forecast_humidity_bridge: false,
         }
-      })
+      }))
     }
 
-    return [...actual, ...predicted].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    return addForecastBridge([...actual, ...predicted].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)))
   }, [history, forecast, fromDate, toDate])
   const hasForecastPoints = chartData.some((row) => row.forecast_temperature !== null || row.forecast_humidity !== null)
   const forecastPointCount = chartData.filter((row) => row.forecast_temperature !== null || row.forecast_humidity !== null).length
@@ -255,6 +291,36 @@ export default function UserDashboard() {
   const forecastSnapshot = forecast.find((row) => row.temperature !== null && row.temperature !== undefined) || forecast[0]
   const forecastTemp = forecastSnapshot?.temperature ?? forecastSnapshot?.predicted_temperature ?? forecastSnapshot?.predicted_value
   const confidence = forecastSnapshot?.confidence ?? forecastSnapshot?.confidence_score
+
+  const downloadCsv = async () => {
+    if (!activeSensorId) return
+    const normalizedFrom = fromDate <= toDate ? fromDate : toDate
+    const normalizedTo = fromDate <= toDate ? toDate : fromDate
+    setExporting(true)
+    try {
+      const res = await api.get(`/api/sensors/${activeSensorId}/history/export`, {
+        params: {
+          from_date: normalizedFrom,
+          to_date: normalizedTo,
+        },
+        responseType: 'blob',
+      })
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const safeSensorId = String(activeSensorId).replace(/[^a-zA-Z0-9_-]+/g, '_')
+      link.href = url
+      link.download = `${safeSensorId}_${normalizedFrom}_${normalizedTo}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Khong tai duoc file CSV cho sensor nay.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-dark-900 p-8">
@@ -305,6 +371,18 @@ export default function UserDashboard() {
           </label>
         </div>
 
+        <div className="mb-5 flex justify-end">
+          <button
+            type="button"
+            onClick={downloadCsv}
+            disabled={!activeSensorId || exporting}
+            className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-emerald-200 transition hover:border-emerald-300 disabled:opacity-60"
+          >
+            <Download className="w-4 h-4" />
+            {exporting ? 'Dang tai CSV...' : 'Tai CSV cua sensor'}
+          </button>
+        </div>
+
         {error && (
           <div className="mb-4 rounded-lg border border-yellow-400/30 bg-yellow-500/10 px-4 py-3 text-yellow-200 text-sm">
             {error}
@@ -315,7 +393,7 @@ export default function UserDashboard() {
           <div className="flex items-start justify-between mb-4">
             <div>
               <h3 className="text-white font-semibold">Chart Output</h3>
-              <p className="text-gray-500 text-sm">Recorded la du lieu that, Forecast la ket qua Databricks. Forecast chi hien thi tu thoi diem hien tai tro di.</p>
+              <p className="text-gray-500 text-sm">Recorded la du lieu that, Forecast la ket qua Databricks. Forecast chi hien thi tu thoi diem hien tai tro di va duoc noi mem tu moc actual cuoi cung.</p>
               {!hasForecastPoints && (
                 <p className="text-amber-300 text-xs mt-2">Khung ngay dang chon hien khong con moc forecast nao o tuong lai.</p>
               )}
@@ -338,15 +416,36 @@ export default function UserDashboard() {
                 <YAxis yAxisId="temp" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
                 <YAxis yAxisId="hum" orientation="right" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
                 <Tooltip
-                  labelFormatter={(_, payload) => payload?.[0]?.payload?.tooltipLabel || '--'}
-                  formatter={(value, name) => [fmt(value, 2), name]}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null
+                    const row = payload[0]?.payload || {}
+                    const tooltipRows = payload.filter((entry) => {
+                      if (entry.dataKey === 'forecast_temperature' && row.forecast_temperature_bridge) return false
+                      if (entry.dataKey === 'forecast_humidity' && row.forecast_humidity_bridge) return false
+                      return entry.value !== null && entry.value !== undefined
+                    })
+                    if (!tooltipRows.length) return null
+
+                    return (
+                      <div className="rounded-lg border border-neon-cyan bg-gray-900 px-4 py-3 shadow-lg">
+                        <p className="mb-3 text-white">{row.tooltipLabel || '--'}</p>
+                        <div className="space-y-2">
+                          {tooltipRows.map((entry) => (
+                            <p key={entry.dataKey} style={{ color: entry.color }}>
+                              {entry.name} : {fmt(entry.value, 2)}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  }}
                   contentStyle={{ backgroundColor: '#111827', border: '1px solid #00f0ff', borderRadius: 8 }}
                 />
                 <Legend />
-                <Line yAxisId="temp" type="monotone" dataKey="temperature" stroke="#ff6680" strokeWidth={3} dot={false} name="temperature recorded" />
-                <Line yAxisId="hum" type="monotone" dataKey="humidity" stroke="#38bdf8" strokeWidth={3} dot={false} name="humidity recorded" />
-                <Line yAxisId="temp" type="monotone" dataKey="forecast_temperature" stroke="#ffd400" strokeWidth={3} strokeDasharray="6 5" dot={showForecastDots ? { r: 4, fill: '#ffd400', stroke: '#ffd400' } : false} activeDot={{ r: 6 }} name="temperature forecast" />
-                <Line yAxisId="hum" type="monotone" dataKey="forecast_humidity" stroke="#ff7ab6" strokeWidth={3} strokeDasharray="6 5" dot={showForecastDots ? { r: 4, fill: '#ff7ab6', stroke: '#ff7ab6' } : false} activeDot={{ r: 6 }} name="humidity forecast" />
+                <Line yAxisId="temp" type="monotone" dataKey="temperature" stroke="#ff6680" strokeWidth={3} dot={false} strokeLinecap="round" strokeLinejoin="round" name="temperature recorded" />
+                <Line yAxisId="hum" type="monotone" dataKey="humidity" stroke="#38bdf8" strokeWidth={3} dot={false} strokeLinecap="round" strokeLinejoin="round" name="humidity recorded" />
+                <Line yAxisId="temp" type="monotone" dataKey="forecast_temperature" stroke="#ffd400" strokeWidth={3} strokeDasharray="6 5" strokeLinecap="round" strokeLinejoin="round" dot={showForecastDots ? { r: 4, fill: '#ffd400', stroke: '#ffd400' } : false} activeDot={{ r: 6 }} connectNulls name="temperature forecast" />
+                <Line yAxisId="hum" type="monotone" dataKey="forecast_humidity" stroke="#ff7ab6" strokeWidth={3} strokeDasharray="6 5" strokeLinecap="round" strokeLinejoin="round" dot={showForecastDots ? { r: 4, fill: '#ff7ab6', stroke: '#ff7ab6' } : false} activeDot={{ r: 6 }} connectNulls name="humidity forecast" />
               </LineChart>
             </ResponsiveContainer>
           )}
