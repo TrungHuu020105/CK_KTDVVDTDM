@@ -54,6 +54,13 @@ export default function Alerts() {
     return date.toLocaleTimeString('vi-VN', { hour12: false })
   }
 
+  const formatOneDecimal = (value) => {
+    if (value === null || value === undefined || value === '') return 'N/A'
+    const numberValue = Number(value)
+    if (Number.isNaN(numberValue)) return String(value)
+    return numberValue.toFixed(1)
+  }
+
   const fetchAlerts = async () => {
     try {
       const response = await api.get('/api/alerts?hours=24&limit=100')
@@ -278,14 +285,14 @@ export default function Alerts() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm text-gray-500">Current:</p>
                     <p className="text-lg font-bold text-white">
-                      {alert.current_value}
+                      {formatOneDecimal(alert.current_value)}
                       <span className="text-xs text-gray-400 ml-1">{getMetricUnit(alert.metric_type)}</span>
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="text-sm text-gray-500">Threshold:</p>
                     <p className="text-lg font-bold text-neon-yellow">
-                      {alert.threshold}
+                      {formatOneDecimal(alert.threshold)}
                       <span className="text-xs text-gray-400 ml-1">{getMetricUnit(alert.metric_type)}</span>
                     </p>
                   </div>

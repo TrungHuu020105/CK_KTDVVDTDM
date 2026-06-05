@@ -210,7 +210,7 @@ def _forecast_message(device: IoTDevice, breach: dict) -> str:
     unit = breach["unit"]
     return (
         f"Forecast alert: {device.name or device.source} dự báo {breach['metric_type']} "
-        f"{breach['current_value']:.2f}{unit} vào {forecast_time}, {comparator} {breach['threshold']:.2f}{unit}."
+        f"{breach['current_value']:.1f}{unit} vào {forecast_time}, {comparator} {breach['threshold']:.1f}{unit}."
     )
 
 
