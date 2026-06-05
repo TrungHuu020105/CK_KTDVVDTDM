@@ -150,6 +150,37 @@ npm install
 npm run dev
 ```
 
+## Chay bang Docker
+
+Neu ban muon deploy toan bo stack len Docker, repo da co san `docker-compose.yml` va se doc truc tiep cau hinh tu `app/.env` va `iot_backend/.env`.
+
+### 1. Kiem tra cau hinh env
+
+- `app/.env` chua cau hinh cho app backend.
+- `iot_backend/.env` chua cau hinh cho IoT backend.
+- Docker Compose se giu PostgreSQL VPS hien co thong qua `DB_HOST` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` trong cac file env nay.
+- Docker Compose chi override `IOT_BACKEND_URL=http://iot_backend:8100` de app backend goi noi bo trong container.
+
+### 2. Build va chay
+
+```powershell
+docker compose up --build
+```
+
+### 3. URL sau khi chay
+
+- Frontend: `http://localhost:3000`
+- App backend: `http://localhost:8000`
+- IoT backend: `http://localhost:8100`
+
+### 4. Ghi chu quan trong
+
+- Frontend trong Docker da duoc cau hinh dung same-origin, nen UI goi `/api/...` truc tiep qua Nginx.
+- `app` se proxy cac route sensor/alert sang `iot_backend` bang `IOT_BACKEND_URL=http://iot_backend:8100`.
+- `DATABASE_URL` khong can hardcode trong compose nua; app va iot_backend se tu build URL tu `app/.env` va `iot_backend/.env`, nen van dung PostgreSQL VPS hien co.
+- `iot_backend` van co the khoi dong duoc neu MQTT broker chua san sang, nhung chuc nang realtime ingest se khong co du lieu.
+- Neu ban muon dung broker tai may host tren Docker Desktop Windows, `MQTT_HOST=host.docker.internal` thuong la dung.
+
 ## Diem nhan bao cao
 
 - Kien truc dich vu ro rang: frontend, app gateway, iot_backend, Databricks Lakehouse.
